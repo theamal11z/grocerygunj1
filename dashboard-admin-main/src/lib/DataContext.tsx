@@ -17,6 +17,7 @@ type PaymentMethod = Database['public']['Tables']['payment_methods']['Row'];
 type Notification = Database['public']['Tables']['notifications']['Row'];
 type CartItem = Database['public']['Tables']['cart_items']['Row'];
 type Settings = Database['public']['Tables']['settings']['Row'];
+type User = Profile; // Use Profile as a User type for compatibility
 
 // Define context type with authentication state
 interface DataContextType {
@@ -25,6 +26,7 @@ interface DataContextType {
   orders: Order[];
   offers: Offer[];
   profiles: Profile[];
+  users: User[]; // Add users to the interface
   wishlists: Wishlist[];
   orderItems: OrderItem[];
   addresses: Address[];
@@ -53,6 +55,7 @@ const DataContext = createContext<DataContextType>({
   orders: [],
   offers: [],
   profiles: [],
+  users: [], // Add users to the default context
   wishlists: [],
   orderItems: [],
   addresses: [],
@@ -85,6 +88,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [orders, setOrders] = useState<Order[]>([]);
   const [offers, setOffers] = useState<Offer[]>([]);
   const [profiles, setProfiles] = useState<Profile[]>([]);
+  const [users, setUsers] = useState<User[]>([]); // Add users state
   const [wishlists, setWishlists] = useState<Wishlist[]>([]);
   const [orderItems, setOrderItems] = useState<OrderItem[]>([]);
   const [addresses, setAddresses] = useState<Address[]>([]);
@@ -1195,17 +1199,18 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
     orders,
     offers,
     profiles,
+    users: profiles, // Map profiles to users for compatibility
     wishlists,
     orderItems,
     addresses,
     paymentMethods,
-    notifications,
+    notifications: notifications,
     cartItems,
     settings,
     loading,
     error,
     refreshData: fetchData,
-    isAuthenticated: isAdmin,
+    isAuthenticated: !!session,
     updateOrderStatus,
     deleteOrder,
     addToWishlist,

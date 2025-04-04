@@ -5,6 +5,7 @@ import { useAuth } from "@/lib/AuthContext";
 import { useData } from "@/lib/DataContext";
 import { format, formatDistanceToNow } from "date-fns";
 import { useNavigate } from "react-router-dom";
+import { useTheme } from "@/components/theme-provider";
 import { 
   DropdownMenu, 
   DropdownMenuContent, 
@@ -24,7 +25,7 @@ interface HeaderProps {
 }
 
 export const Header = ({ sidebarOpen, setSidebarOpen }: HeaderProps) => {
-  const [isDarkMode, setIsDarkMode] = useState(false);
+  const { theme, setTheme } = useTheme();
   const { user, signOut } = useAuth();
   const { notifications, refreshData, markNotificationAsRead } = useData();
   const navigate = useNavigate();
@@ -38,13 +39,8 @@ export const Header = ({ sidebarOpen, setSidebarOpen }: HeaderProps) => {
     }
   }, [notifications]);
   
-  const toggleDarkMode = () => {
-    if (isDarkMode) {
-      document.documentElement.classList.remove('dark');
-    } else {
-      document.documentElement.classList.add('dark');
-    }
-    setIsDarkMode(!isDarkMode);
+  const toggleTheme = () => {
+    setTheme(theme === "light" ? "dark" : "light");
   };
 
   // Get initials from user's email
@@ -112,12 +108,14 @@ export const Header = ({ sidebarOpen, setSidebarOpen }: HeaderProps) => {
         
         <div className="ml-auto flex items-center gap-2">
           {/* Theme toggle */}
-          <button
-            onClick={toggleDarkMode}
-            className="p-2 rounded-full hover:bg-secondary"
+          <Button
+            onClick={toggleTheme}
+            variant="ghost"
+            size="icon"
+            className="rounded-full"
           >
-            {isDarkMode ? <Sun size={20} /> : <Moon size={20} />}
-          </button>
+            {theme === "dark" ? <Sun size={18} /> : <Moon size={18} />}
+          </Button>
           
           {/* Notifications */}
           <DropdownMenu>

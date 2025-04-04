@@ -1,125 +1,167 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { 
   Dialog, 
   DialogContent, 
   DialogHeader, 
-  DialogTitle, 
+  DialogTitle,
   DialogFooter,
   DialogClose
 } from "@/components/ui/dialog";
+import { 
+  Form, 
+  FormControl, 
+  FormDescription, 
+  FormField, 
+  FormItem, 
+  FormLabel, 
+  FormMessage 
+} from "@/components/ui/form";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
+import { useToast } from "@/components/ui/use-toast";
+import { 
+  Tag, 
+  ImagePlus, 
+  Upload, 
+  X, 
+  Loader2, 
+  ExternalLink, 
+  Link as LinkIcon,
+  Check,
+  AlertCircle,
+  Plus
+} from "lucide-react";
+import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { Database } from "@/lib/database.types";
-import { toast } from "sonner";
-import { supabase } from "@/lib/supabase";
-import { XCircle } from "lucide-react";
-import { Checkbox } from "@/components/ui/checkbox";
+import { useForm } from "react-hook-form";
+import { zodResolver } from "@hookform/resolvers/zod";
+import * as z from "zod";
+import { Textarea } from "@/components/ui/textarea";
+import { Switch } from "@/components/ui/switch";
+import { Label } from "@/components/ui/label";
+import { 
+  Card, 
+  CardContent,
+  CardDescription,
+  CardFooter,
+  CardHeader,
+  CardTitle
+} from "@/components/ui/card";
+import { cn } from "@/lib/utils";
+import { Alert, AlertDescription } from "@/components/ui/alert";
+import { Separator } from "@/components/ui/separator";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { v4 as uuidv4 } from 'uuid';
 
 // Define types
-type Category = Database['public']['Tables']['categories']['Row'];
-type CategoryInsert = Database['public']['Tables']['categories']['Insert'];
+type Category = Database['public']['Tables']['categories']['Row'] & {
+  description?: string | null; // Add description as an optional property
+};
+
+// Define the type for saving a category that includes description
+type SaveCategoryPayload = Omit<Database['public']['Tables']['categories']['Row'], 'id' | 'created_at'> & {
+  description?: string | null;
+};
 
 // Add Base64 encoding size limit (2MB recommended for database storage)
 const MAX_BASE64_SIZE = 2 * 1024 * 1024; // 2MB
 
-// Initial category state
-const initialCategoryState: Partial<Category> = {
-  name: '',
-  image_url: '',
-};
-
 interface CategoryDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  onSaveCategory: (category: SaveCategoryPayload) => Promise<void>;
   category?: Category;
-  onSave: () => void;
+  allCategories?: Category[]; // Added to allow parent category selection
 }
+
+// Form validation schema
+const formSchema = z.object({
+  name: z.string()
+    .min(2, { message: "Category name must be at least 2 characters." })
+    .max(50, { message: "Category name must be less than 50 characters." }),
+  image_url: z.string().url({ message: "Please enter a valid URL." }).optional().or(z.literal('')),
+  parent_id: z.string().optional().nullable(),
+  updated_at: z.string().optional(),
+  description: z.string().optional().nullable() // Added for better category description
+});
 
 const CategoryDialog: React.FC<CategoryDialogProps> = ({
   open,
   onOpenChange,
+  onSaveCategory,
   category,
-  onSave
+  allCategories = []
 }) => {
-  const [formData, setFormData] = useState<Partial<Category>>(initialCategoryState);
-  const [loading, setLoading] = useState(false);
+  const { toast } = useToast();
+  const [isLoading, setIsLoading] = useState(false);
+  const [activeTab, setActiveTab] = useState<string>("basic");
+  const [imageFile, setImageFile] = useState<File | null>(null);
+  const [imagePreview, setImagePreview] = useState<string | null>(null);
+  const [useBase64, setUseBase64] = useState(true);
+  const [base64Data, setBase64Data] = useState<string | null>(null);
+  const [dragActive, setDragActive] = useState(false);
   const [imageUrl, setImageUrl] = useState<string>('');
   const [imageError, setImageError] = useState<string>('');
-  const [errors, setErrors] = useState<Record<string, string>>({});
-  const [uploading, setUploading] = useState<boolean>(false);
   const [uploadProgress, setUploadProgress] = useState<number>(0);
-  // Add state for Base64 mode - default to true to avoid storage issues
-  const [useBase64, setUseBase64] = useState<boolean>(true);
+  const [uploading, setUploading] = useState<boolean>(false);
+  
+  // Filter out the current category from parent options to prevent circular references
+  const parentOptions = useMemo(() => {
+    return allCategories.filter(c => c.id !== category?.id);
+  }, [allCategories, category]);
 
-  // Set form data when category changes (editing mode)
-  useEffect(() => {
-    if (category) {
-      setFormData(category);
-    } else {
-      setFormData(initialCategoryState);
+  // Initialize form with react-hook-form
+  const form = useForm<z.infer<typeof formSchema>>({
+    resolver: zodResolver(formSchema),
+    defaultValues: {
+      name: category?.name ?? "",
+      image_url: category?.image_url ?? "",
+      parent_id: category?.parent_id ?? null,
+      updated_at: new Date().toISOString(),
+      description: "" // Initialize with empty string
     }
-  }, [category]);
+  });
+
+  // Reset form and states when dialog opens or category changes
+  useEffect(() => {
+    if (open) {
+      form.reset({
+        name: category?.name ?? "",
+        image_url: category?.image_url ?? "",
+        parent_id: category?.parent_id ?? null,
+        updated_at: new Date().toISOString(),
+        description: category?.description ?? ""
+      });
+      
+      setImageFile(null);
+      
+      if (category?.image_url) {
+        setImagePreview(category.image_url);
+        
+        // Set base64Data if image URL is base64
+        if (category.image_url.startsWith('data:image/')) {
+          setBase64Data(category.image_url);
+          setUseBase64(true);
+        } else {
+          setBase64Data(null);
+          setUseBase64(true); // Default to Base64 for new uploads
+        }
+      } else {
+        setImagePreview(null);
+        setBase64Data(null);
+      }
+      
+      // Set appropriate default tab
+      setActiveTab("basic");
+      setImageUrl('');
+      setImageError('');
+    }
+  }, [open, category, form]);
 
   // Validate image URL
   const isValidImageUrl = (url: string): boolean => {
     return url.trim() !== '' && 
-      (url.startsWith('http://') || url.startsWith('https://') || url.startsWith('data:image/'));
-  };
-
-  const validateForm = () => {
-    const newErrors: Record<string, string> = {};
-    
-    if (!formData.name?.trim()) {
-      newErrors.name = 'Category name is required';
-    }
-    
-    setErrors(newErrors);
-    return Object.keys(newErrors).length === 0;
-  };
-
-  const handleChange = (field: keyof Category, value: any) => {
-    setFormData(prev => ({
-      ...prev,
-      [field]: value
-    }));
-    
-    // Clear error for this field if it exists
-    if (errors[field]) {
-      setErrors(prev => {
-        const newErrors = { ...prev };
-        delete newErrors[field];
-        return newErrors;
-      });
-    }
-  };
-
-  const handleUpdateImageUrl = () => {
-    if (!imageUrl.trim()) {
-      setImageError('Image URL cannot be empty');
-      return;
-    }
-    
-    if (!isValidImageUrl(imageUrl)) {
-      setImageError('Please enter a valid URL (starting with http://, https://, or data:image/)');
-      return;
-    }
-    
-    setFormData(prev => ({
-      ...prev,
-      image_url: imageUrl
-    }));
-    setImageUrl('');
-    setImageError('');
-    toast.success('Image URL updated');
-  };
-
-  const handleRemoveImage = () => {
-    setFormData(prev => ({
-      ...prev,
-      image_url: null
-    }));
-    toast.success('Image removed');
+      (url.startsWith('http://') || url.startsWith('https://'));
   };
 
   // Handle image URL input change
@@ -128,16 +170,80 @@ const CategoryDialog: React.FC<CategoryDialogProps> = ({
     setImageError('');
   };
 
-  // Handle Enter key in image URL input
+  // Handle URL input enter key
   const handleImageUrlKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
     if (e.key === 'Enter') {
       e.preventDefault();
-      handleUpdateImageUrl();
+      handleAddImageUrl();
     }
   };
 
-  // Handle file upload using Base64 encoding (no storage bucket needed)
-  const handleBase64Upload = useCallback(async (event: React.ChangeEvent<HTMLInputElement>) => {
+  // Handle add image URL
+  const handleAddImageUrl = () => {
+    if (!imageUrl.trim()) {
+      setImageError('Image URL cannot be empty');
+      return;
+    }
+    
+    if (!isValidImageUrl(imageUrl)) {
+      setImageError('Please enter a valid URL (starting with http:// or https://)');
+      return;
+    }
+    
+    handleUrlChange(imageUrl);
+    setImageUrl('');
+  };
+
+  // Handle file input change
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files;
+    if (files && files.length > 0) {
+      processFile(files[0]);
+    }
+  };
+
+  // Process uploaded file
+  const processFile = (file: File) => {
+    if (!file) return;
+      
+    // Validate file type
+    const validTypes = ['image/jpeg', 'image/png', 'image/webp', 'image/gif'];
+    if (!validTypes.includes(file.type)) {
+      toast({
+        variant: "destructive",
+        title: "Invalid file type",
+        description: "Please upload a JPEG, PNG, WebP, or GIF image."
+      });
+      return;
+    }
+    
+    // Validate file size 
+    const MAX_SIZE = useBase64 ? MAX_BASE64_SIZE : 5 * 1024 * 1024; // 2MB for Base64, 5MB otherwise
+    if (file.size > MAX_SIZE) {
+      toast({
+        variant: "destructive",
+        title: "File too large",
+        description: `Maximum file size is ${MAX_SIZE/1024/1024}MB.`
+      });
+      return;
+    }
+    
+    setImageFile(file);
+      
+    // If using Base64, convert and set directly
+    if (useBase64) {
+      convertToBase64(file);
+    } else {
+      // Create a URL for the file preview only
+      const fileURL = URL.createObjectURL(file);
+      setImagePreview(fileURL);
+      // Clear any URL input
+      form.setValue("image_url", "");
+    }
+  };
+
+  // Handle base64 upload
+  const handleBase64Upload = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
     if (!file) return;
     
@@ -185,14 +291,13 @@ const CategoryDialog: React.FC<CategoryDialogProps> = ({
       setUploadProgress(90);
       console.log('Base64 encoding complete. Length:', base64Image.length);
       
-      // Update form data with the new Base64 image
-      setFormData(prev => ({
-        ...prev,
-        image_url: base64Image
-      }));
+      // Set the base64 data
+      setBase64Data(base64Image);
+      setImagePreview(base64Image);
+      form.setValue("image_url", "");
       
       setUploadProgress(100);
-      toast.success('Image encoded and added successfully');
+      toast.success('Image encoded successfully');
       
     } catch (error) {
       console.error('Error processing image:', error);
@@ -203,264 +308,518 @@ const CategoryDialog: React.FC<CategoryDialogProps> = ({
       }
       
       setImageError(errorMessage);
-      toast.error(errorMessage);
+      toast({
+        variant: "destructive",
+        title: "Error",
+        description: errorMessage
+      });
     } finally {
       setUploading(false);
       setUploadProgress(0);
       // Reset file input
       event.target.value = '';
     }
-  }, []);
+  };
 
-  // Handle file upload via storage bucket
-  const handleFileUpload = useCallback(async (event: React.ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0];
-    if (!file) return;
-    
-    // Validate file type
-    const allowedTypes = ['image/jpeg', 'image/png', 'image/webp', 'image/gif'];
-    if (!allowedTypes.includes(file.type)) {
-      setImageError('Invalid file type. Please upload JPEG, PNG, WebP, or GIF images only.');
-      return;
-    }
-    
-    // Validate file size (max 5MB)
-    const MAX_SIZE = 5 * 1024 * 1024; // 5MB
-    if (file.size > MAX_SIZE) {
-      setImageError('File too large. Maximum size is 5MB.');
-      return;
-    }
-    
-    try {
-      setUploading(true);
-      setUploadProgress(10);
-      
-      // Implement your existing bucket storage upload logic here
-      // This is just a placeholder for now
-      toast.error('Storage bucket upload not implemented. Use Base64 mode instead.');
-      setImageError('Storage bucket upload not implemented');
-      
-    } catch (error) {
-      console.error('Upload error:', error);
-      setImageError('Failed to upload image to storage bucket');
-      toast.error('Upload failed');
-    } finally {
-      setUploading(false);
-      setUploadProgress(0);
-      event.target.value = '';
-    }
-  }, []);
-
-  // Combined file input handler
-  const handleFileInputChange = useCallback((event: React.ChangeEvent<HTMLInputElement>) => {
-    setImageError(''); // Clear any previous errors
-    
+  // Combined file upload handler
+  const handleFileUploadSwitch = (event: React.ChangeEvent<HTMLInputElement>) => {
     if (useBase64) {
       handleBase64Upload(event);
     } else {
-      handleFileUpload(event);
+      handleFileChange(event);
     }
-  }, [useBase64, handleBase64Upload, handleFileUpload]);
+  };
 
-  const handleSave = async () => {
-    if (!validateForm()) return;
+  // Handle drag and drop
+  const handleDrag = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
     
-    setLoading(true);
-    try {
-      const categoryData: CategoryInsert = {
-        name: formData.name?.trim() || '',
-        image_url: formData.image_url
-      };
-      
-      // Validate name is not empty after trimming
-      if (!categoryData.name) {
-        throw new Error('Category name cannot be empty');
-      }
-      
-      // Log the data being saved for debugging
-      console.log('Saving category data:', categoryData);
-      
-      let result;
-      
-      if (category?.id) {
-        // Update existing category
-        result = await supabase
-          .from('categories')
-          .update(categoryData)
-          .eq('id', category.id)
-          .select();
+    if (e.type === "dragenter" || e.type === "dragover") {
+      setDragActive(true);
+    } else if (e.type === "dragleave") {
+      setDragActive(false);
+    }
+  };
+  
+  const handleDrop = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setDragActive(false);
+    
+    if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+      if (useBase64) {
+        processFile(e.dataTransfer.files[0]);
       } else {
-        // Create new category
-        result = await supabase
-          .from('categories')
-          .insert([categoryData])
-          .select();
+        processFile(e.dataTransfer.files[0]);
+      }
+    }
+  };
+
+  // Convert file to base64
+  const convertToBase64 = (file: File) => {
+    setUploading(true);
+    setUploadProgress(10);
+    
+    const reader = new FileReader();
+    reader.readAsDataURL(file);
+    reader.onload = () => {
+      setUploadProgress(80);
+      setBase64Data(reader.result as string);
+      setImagePreview(reader.result as string);
+      setUploadProgress(100);
+      setUploading(false);
+      
+      toast.success('Image encoded successfully');
+    };
+    reader.onerror = (error) => {
+      console.error('Error converting image to Base64:', error);
+      toast({
+        variant: "destructive",
+        title: "Conversion failed",
+        description: "Failed to convert image to Base64 format."
+      });
+      setUploading(false);
+      setUploadProgress(0);
+    };
+  };
+
+  // Handle URL input change
+  const handleUrlChange = (url: string) => {
+    form.setValue("image_url", url);
+    setImagePreview(url || null);
+    setImageFile(null);
+    setBase64Data(null);
+  };
+
+  // Toggle base64 encoding option
+  const handleToggleBase64 = (checked: boolean) => {
+    setUseBase64(checked);
+    if (checked && imageFile) {
+      convertToBase64(imageFile);
+    }
+  };
+
+  // Clear image selection
+  const clearImage = () => {
+    setImageFile(null);
+    setImagePreview(null);
+    setBase64Data(null);
+    form.setValue("image_url", "");
+  };
+
+  // Test image URL
+  const testImageUrl = () => {
+    const url = form.getValues("image_url");
+    if (!url) {
+      toast({
+        variant: "destructive",
+        title: "No URL provided",
+        description: "Please enter an image URL to test."
+      });
+      return;
+    }
+    
+    const img = new Image();
+    img.onload = () => {
+      toast({
+        title: "Image loaded successfully",
+        description: `${url} (${img.width}×${img.height})`
+      });
+    };
+    img.onerror = () => {
+      toast({
+        variant: "destructive",
+        title: "Invalid image URL",
+        description: "The URL provided does not contain a valid image."
+      });
+    };
+    img.src = url;
+  };
+
+  // Handle form submission
+  const onSubmit = async (values: z.infer<typeof formSchema>) => {
+    try {
+      setIsLoading(true);
+      
+      // Determine the image URL to save
+      let finalImageUrl = '';
+      
+      if (base64Data) {
+        finalImageUrl = base64Data;
+      } else if (values.image_url) {
+        finalImageUrl = values.image_url;
       }
       
-      if (result.error) {
-        throw result.error;
-      }
+      // Call the save function with form data
+      await onSaveCategory({
+        name: values.name,
+        image_url: finalImageUrl,
+        parent_id: values.parent_id === "none" ? null : values.parent_id,
+        updated_at: new Date().toISOString(),
+        description: values.description
+      });
       
-      if (!result.data || result.data.length === 0) {
-        throw new Error('Failed to save category, no data returned');
-      }
-      
-      // Success
-      console.log(category?.id ? 'Category updated successfully:' : 'Category added successfully:', result.data);
-      toast.success(category?.id ? 'Category updated successfully' : 'Category added successfully');
-      onSave();
+      // Close the dialog on success
       onOpenChange(false);
       
+      toast({
+        title: "Success",
+        description: `Category "${values.name}" has been ${category ? 'updated' : 'created'}.`,
+      });
     } catch (error) {
       console.error('Error saving category:', error);
-      let errorMessage = 'Failed to save category';
-      
-      // Check for specific database errors
-      if (error instanceof Error) {
-        errorMessage = error.message;
-        
-        // Look for specific Supabase/Postgres error patterns
-        if (errorMessage.includes('duplicate key value')) {
-          errorMessage = 'A category with this name already exists';
-        } else if (errorMessage.includes('permission') || errorMessage.includes('403')) {
-          errorMessage = 'Permission error. You may not have rights to save categories.';
-        } else if (errorMessage.toLowerCase().includes('network')) {
-          errorMessage = 'Network error. Check your internet connection.';
-        } else if (errorMessage.includes('not found')) {
-          errorMessage = 'The category could not be found. It may have been deleted.';
-        } else if (errorMessage.includes('validation')) {
-          errorMessage = 'Validation error. Please check your input values.';
-        } else if (errorMessage.includes('JWT')) {
-          errorMessage = 'Authentication error. Please try logging out and back in.';
-        }
-      }
-      
-      toast.error(errorMessage, {
-        description: 'Check browser console for more details. You may need to refresh the page.'
+      toast({
+        variant: "destructive",
+        title: "Error",
+        description: `Failed to ${category ? 'update' : 'create'} category. Please try again.`,
       });
     } finally {
-      setLoading(false);
+      setIsLoading(false);
     }
   };
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-[425px]">
-        <DialogHeader>
-          <DialogTitle>{category ? 'Edit Category' : 'Add Category'}</DialogTitle>
+      <DialogContent className="sm:max-w-[650px] p-0 overflow-hidden">
+        <DialogHeader className="px-6 pt-6 pb-2">
+          <DialogTitle className="flex items-center gap-2 text-xl">
+            <Tag className="h-5 w-5 text-primary" />
+            {category ? 'Edit Category' : 'Create New Category'}
+          </DialogTitle>
         </DialogHeader>
         
-        <div className="grid gap-4 py-4">
-          <div className="grid grid-cols-4 items-center gap-4">
-            <Label htmlFor="name" className="text-right">
-              Name
-            </Label>
-            <Input
-              id="name"
-              value={formData.name || ''}
-              onChange={(e) => handleChange('name', e.target.value)}
-              className="col-span-3"
-              placeholder="Category name"
-            />
-            {errors.name && <p className="text-destructive text-sm col-start-2 col-span-3">{errors.name}</p>}
-          </div>
-          
-          <div className="grid grid-cols-4 items-start gap-4">
-            <Label htmlFor="image" className="text-right pt-2">
-              Image
-            </Label>
-            <div className="col-span-3 space-y-2">
-              {/* Image storage method toggle */}
-              <div className="flex items-center space-x-2 mb-2">
-                <Checkbox
-                  id="use-base64"
-                  checked={useBase64}
-                  onCheckedChange={(checked) => setUseBase64(checked as boolean)}
-                />
-                <Label htmlFor="use-base64" className="text-xs cursor-pointer">
-                  Use Base64 encoding (store in database)
-                </Label>
+        <Form {...form}>
+          <form onSubmit={form.handleSubmit(onSubmit)}>
+            <Tabs defaultValue="basic" value={activeTab} onValueChange={setActiveTab} className="w-full">
+              <div className="border-b">
+                <TabsList className="w-full justify-start rounded-none h-12 px-6 bg-transparent">
+                  <TabsTrigger value="basic" className="data-[state=active]:border-b-2 data-[state=active]:border-primary rounded-none">
+                    Basic Info
+                  </TabsTrigger>
+                  <TabsTrigger value="image" className="data-[state=active]:border-b-2 data-[state=active]:border-primary rounded-none">
+                    Image
+                  </TabsTrigger>
+                  <TabsTrigger value="hierarchy" className="data-[state=active]:border-b-2 data-[state=active]:border-primary rounded-none">
+                    Hierarchy
+                  </TabsTrigger>
+                </TabsList>
+              </div>
+              
+              <div className="p-6 space-y-6">
+                {/* Basic Info Tab */}
+                <TabsContent value="basic" className="mt-0 space-y-4">
+                  <div className="grid gap-4">
+                    <FormField
+                      control={form.control}
+                      name="name"
+                      render={({ field }) => (
+                        <FormItem>
+                          <FormLabel>Category Name</FormLabel>
+                          <FormControl>
+                            <Input 
+                              placeholder="Enter category name" 
+                              {...field} 
+                              disabled={isLoading}
+                              className="focus-visible:ring-primary"
+                            />
+                          </FormControl>
+                          <FormDescription>
+                            This name will be displayed to users browsing products.
+                          </FormDescription>
+                          <FormMessage />
+                        </FormItem>
+                      )}
+                    />
+                    
+                    <FormField
+                      control={form.control}
+                      name="description"
+                      render={({ field }) => (
+                        <FormItem>
+                          <FormLabel>Description</FormLabel>
+                          <FormControl>
+                            <Textarea 
+                              placeholder="Enter category description (optional)" 
+                              className="resize-none focus-visible:ring-primary"
+                              {...field} 
+                              value={field.value || ""}
+                              disabled={isLoading}
+                            />
+                          </FormControl>
+                          <FormDescription>
+                            Provide a brief description of this category.
+                          </FormDescription>
+                          <FormMessage />
+                        </FormItem>
+                      )}
+                    />
+                  </div>
+                </TabsContent>
+                
+                {/* Image Tab */}
+                <TabsContent value="image" className="mt-0 space-y-6">
+                  <Card>
+                    <CardContent className="p-4 space-y-4 pt-6">
+                      <div className="space-y-4">
+                        <div className="flex justify-between items-center">
+                          <h3 className="text-sm font-medium flex items-center gap-2">
+                            <ImagePlus className="h-4 w-4 text-muted-foreground" />
+                            Category Image
+                          </h3>
+                          
+                          {/* Clear image button */}
+                          {imagePreview && (
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              size="sm"
+                              onClick={clearImage}
+                              disabled={isLoading}
+                              className="h-8 px-2 text-xs text-red-500 hover:text-red-600 hover:bg-red-50"
+                            >
+                              <X className="h-4 w-4 mr-1" />
+                              Clear image
+                            </Button>
+                          )}
+                        </div>
+
+                        {/* Preview area */}
+                        <div className="relative">
+                          <div 
+                            className={cn(
+                              "border rounded-lg flex justify-center items-center overflow-hidden transition-all",
+                              imagePreview ? "aspect-square max-h-[300px] bg-muted" : "h-[200px] bg-muted",
+                              dragActive && "border-primary border-dashed border-2 bg-primary/5"
+                            )}
+                            onDragEnter={handleDrag}
+                            onDragLeave={handleDrag}
+                            onDragOver={handleDrag}
+                            onDrop={handleDrop}
+                          >
+                            {imagePreview ? (
+                              <img 
+                                src={imagePreview} 
+                                alt="Category preview" 
+                                className="w-full h-full object-contain"
+                                onError={(e) => {
+                                  console.error(`Error loading image from URL: ${imagePreview}`);
+                                  (e.target as HTMLImageElement).src = "https://placehold.co/600x400?text=Error+Loading+Image";
+                                }}
+                              />
+                            ) : (
+                              <div 
+                                className="text-center p-4 flex flex-col items-center gap-2 cursor-pointer"
+                                onClick={() => document.getElementById('image-upload')?.click()}
+                              >
+                                <div className="h-16 w-16 rounded-full bg-muted-foreground/10 flex items-center justify-center">
+                                  <ImagePlus className="h-8 w-8 text-muted-foreground" />
+                                </div>
+                                <p className="text-sm font-medium">
+                                  {dragActive ? "Drop image here" : "No image selected"}
+                                </p>
+                                <p className="text-xs text-muted-foreground max-w-[250px] text-center">
+                                  Drag and drop an image here or click to browse
+                                </p>
+                              </div>
+                            )}
+                          </div>
+                        </div>
+
+                        {/* Add image section */}
+                        <div className="space-y-2 mt-4">
+                          <div className="flex justify-between items-center">
+                            <Label className="text-sm font-medium">Add Image</Label>
+                            <div className="flex items-center space-x-1 text-xs text-muted-foreground">
+                              <span>Using {useBase64 ? 'Base64 Encoding' : 'External URL'}</span>
+                              <Button 
+                                variant="ghost" 
+                                size="sm" 
+                                className="h-6 px-2"
+                                onClick={() => setUseBase64(!useBase64)}
+                                type="button"
+                              >
+                                Switch
+                              </Button>
+                            </div>
+                          </div>
+                          
+                          {useBase64 ? (
+                            <div className="flex items-center gap-3">
+                              <Input
+                                id="image-upload"
+                                type="file"
+                                accept="image/*"
+                                onChange={handleFileUploadSwitch}
+                                className="flex-1"
+                                disabled={uploading || isLoading}
+                              />
+                              <Button
+                                type="button"
+                                variant="outline"
+                                size="sm"
+                                onClick={() => document.getElementById('image-upload')?.click()}
+                                disabled={uploading || isLoading}
+                              >
+                                {uploading ? (
+                                  <>
+                                    <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                                    Uploading
+                                  </>
+                                ) : (
+                                  <>
+                                    <Upload className="h-4 w-4 mr-2" />
+                                    Upload
+                                  </>
+                                )}
+                              </Button>
+                            </div>
+                          ) : (
+                            <div className="flex items-center gap-3">
+                              <Input
+                                type="url"
+                                placeholder="Enter image URL"
+                                value={imageUrl}
+                                onChange={handleImageUrlChange}
+                                onKeyDown={handleImageUrlKeyDown}
+                                className="flex-1"
+                                disabled={isLoading}
+                              />
+                              <Button
+                                type="button"
+                                variant="outline"
+                                size="sm"
+                                onClick={handleAddImageUrl}
+                                disabled={!imageUrl.trim() || isLoading}
+                              >
+                                <LinkIcon className="h-4 w-4 mr-2" />
+                                Add URL
+                              </Button>
+                            </div>
+                          )}
+                          
+                          {imageError && (
+                            <div className="text-xs text-destructive mt-1">{imageError}</div>
+                          )}
+                          
+                          {uploadProgress > 0 && uploadProgress < 100 && (
+                            <div className="w-full bg-muted rounded-full h-2 mt-2">
+                              <div 
+                                className="bg-primary h-2 rounded-full" 
+                                style={{ width: `${uploadProgress}%` }}
+                              ></div>
+                            </div>
+                          )}
+                        </div>
+                        
+                        {/* Base64 info */}
+                        {useBase64 && (
+                          <div className="mt-4">
+                            <Alert variant="default" className="bg-blue-50 text-blue-700 border-blue-200">
+                              <AlertCircle className="h-4 w-4" />
+                              <AlertDescription className="text-xs">
+                                Base64 encoding stores image data directly in the database.
+                                This is useful for small images without external hosting.
+                                Maximum size: 2MB.
+                              </AlertDescription>
+                            </Alert>
+                          </div>
+                        )}
+                      </div>
+                    </CardContent>
+                  </Card>
+                </TabsContent>
+                
+                {/* Hierarchy Tab */}
+                <TabsContent value="hierarchy" className="mt-0 space-y-4">
+                  <FormField
+                    control={form.control}
+                    name="parent_id"
+                    render={({ field }) => (
+                      <FormItem>
+                        <FormLabel>Parent Category</FormLabel>
+                        <Select
+                          disabled={isLoading}
+                          onValueChange={field.onChange}
+                          value={field.value || "none"}
+                        >
+                          <FormControl>
+                            <SelectTrigger>
+                              <SelectValue placeholder="Select a parent category (optional)" />
+                            </SelectTrigger>
+                          </FormControl>
+                          <SelectContent>
+                            <SelectItem value="none">None (Top-level category)</SelectItem>
+                            {parentOptions.map((cat) => (
+                              <SelectItem key={cat.id} value={cat.id}>
+                                {cat.name}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                        <FormDescription>
+                          Organize categories in a hierarchy. Leave empty for a top-level category.
+                        </FormDescription>
+                        <FormMessage />
+                      </FormItem>
+                    )}
+                  />
+                  
+                  {form.watch("parent_id") && form.watch("parent_id") !== "none" && (
+                    <Alert className="bg-amber-50 border-amber-200">
+                      <AlertCircle className="h-4 w-4 text-amber-600" />
+                      <AlertDescription className="text-amber-800 text-sm">
+                        This will be a subcategory. Products in subcategories may also appear when browsing the parent category.
+                      </AlertDescription>
+                    </Alert>
+                  )}
+                </TabsContent>
+              </div>
+            </Tabs>
+            
+            <Separator />
+            
+            <div className="px-6 py-4 flex justify-between items-center">
+              <div className="text-sm text-muted-foreground">
+                {category ? (
+                  <span>Last updated: {new Date(category.updated_at || category.created_at).toLocaleDateString()}</span>
+                ) : (
+                  <span>New category will be created immediately</span>
+                )}
               </div>
               
               <div className="flex gap-2">
-                <Input
-                  id="image-url"
-                  value={imageUrl}
-                  onChange={handleImageUrlChange}
-                  onKeyDown={handleImageUrlKeyDown}
-                  placeholder="Image URL"
-                  className="flex-1"
-                />
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  onClick={handleUpdateImageUrl}
-                >
-                  Update
+                <DialogClose asChild>
+                  <Button type="button" variant="outline" disabled={isLoading}>
+                    Cancel
+                  </Button>
+                </DialogClose>
+                <Button type="submit" disabled={isLoading} className="gap-1.5">
+                  {isLoading ? (
+                    <>
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                      {category ? 'Updating...' : 'Creating...'}
+                    </>
+                  ) : (
+                    <>
+                      {category ? (
+                        <>
+                          <Check className="h-4 w-4" />
+                          Update Category
+                        </>
+                      ) : (
+                        <>
+                          <Plus className="h-4 w-4" />
+                          Create Category
+                        </>
+                      )}
+                    </>
+                  )}
                 </Button>
               </div>
-              
-              {/* File upload input */}
-              <div className="flex gap-2 items-center">
-                <Input
-                  type="file"
-                  accept="image/*"
-                  onChange={handleFileInputChange}
-                  className="flex-1"
-                />
-              </div>
-              
-              {uploading && (
-                <div className="w-full bg-gray-200 rounded-full h-2.5">
-                  <div 
-                    className="bg-blue-600 h-2.5 rounded-full" 
-                    style={{ width: `${uploadProgress}%` }}
-                  ></div>
-                </div>
-              )}
-              
-              {imageError && <p className="text-destructive text-sm">{imageError}</p>}
-              
-              {formData.image_url && (
-                <div className="relative border rounded p-1 mt-2">
-                  <img 
-                    src={formData.image_url as string} 
-                    alt="Category image"
-                    className="w-full h-32 object-contain"
-                    onError={() => setImageError('Invalid image URL')}
-                  />
-                  <Button
-                    type="button"
-                    variant="destructive"
-                    size="icon"
-                    className="absolute top-1 right-1 h-6 w-6"
-                    onClick={handleRemoveImage}
-                  >
-                    <XCircle className="h-4 w-4" />
-                  </Button>
-                </div>
-              )}
-              
-              <p className="text-xs text-muted-foreground">
-                {useBase64
-                  ? 'Base64 mode: Image will be stored directly in the database'
-                  : 'URL mode: Image will be referenced from an external source'}
-              </p>
             </div>
-          </div>
-        </div>
-        
-        <DialogFooter className="sm:justify-end gap-2 pt-2">
-          <DialogClose asChild>
-            <Button type="button" variant="outline" size="sm" className="sm:size-default">
-              Cancel
-            </Button>
-          </DialogClose>
-          <Button type="button" onClick={handleSave} disabled={loading} size="sm" className="sm:size-default">
-            {loading ? 'Saving...' : 'Save Category'}
-          </Button>
-        </DialogFooter>
+          </form>
+        </Form>
       </DialogContent>
     </Dialog>
   );

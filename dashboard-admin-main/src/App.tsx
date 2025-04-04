@@ -1,4 +1,3 @@
-
 import { Toaster } from "@/components/ui/toaster";
 import { Toaster as Sonner } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -11,6 +10,7 @@ import { AuthProvider } from "@/lib/AuthContext";
 import { ProtectedRoute } from "@/components/auth/ProtectedRoute";
 import ErrorBoundary from "@/components/ErrorBoundary";
 import { useAuth } from "@/lib/AuthContext";
+import { ThemeProvider } from "@/components/theme-provider";
 
 // Pages
 import Index from "@/pages/Index";
@@ -181,19 +181,21 @@ const AppRouter = () => {
 function App() {
   return (
     <ErrorBoundary>
-      <QueryClientProvider client={queryClient}>
-        <BrowserRouter>
-          <AuthProvider>
-            <DataProvider>
-              <TooltipProvider>
-                <Toaster />
-                <Sonner />
-                <AppRouter />
-              </TooltipProvider>
-            </DataProvider>
-          </AuthProvider>
-        </BrowserRouter>
-      </QueryClientProvider>
+      <ThemeProvider defaultTheme="light" storageKey="dashboard-theme">
+        <QueryClientProvider client={queryClient}>
+          <BrowserRouter>
+            <AuthProvider>
+              <DataProvider>
+                <TooltipProvider>
+                  <Toaster />
+                  <Sonner />
+                  <AppRouter />
+                </TooltipProvider>
+              </DataProvider>
+            </AuthProvider>
+          </BrowserRouter>
+        </QueryClientProvider>
+      </ThemeProvider>
     </ErrorBoundary>
   );
 }
