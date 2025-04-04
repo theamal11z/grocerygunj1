@@ -1,0 +1,696 @@
+import React, { useState, useEffect } from 'react';
+import { View, Text, ScrollView, TouchableOpacity, StyleSheet, ActivityIndicator, Alert, Modal, Platform, TextInput } from 'react-native';
+import { router } from 'expo-router';
+import { ChevronLeft, MapPin, CreditCard, Clock, ChevronRight, Plus, DollarSign, Calendar } from 'lucide-react-native';
+import Animated, { FadeIn } from 'react-native-reanimated';
+import { useCart } from '@/hooks/useCart';
+import { useAddresses } from '@/hooks/useAddresses';
+import { usePaymentMethods } from '@/hooks/usePaymentMethods';
+import { useOrders, CreateOrderData } from '@/hooks/useOrders';
+import { useAuth } from '@/hooks/useAuth';
+import { useSettings } from '@/hooks/useSettings';
+import { format, addHours } from 'date-fns';
+
+// Delivery time options
+const deliveryTimes = [
+  { id: '1', time: 'As soon as possible', estimate: '30-45 minutes' },
+  { id: '2', time: 'Schedule for later', estimate: 'Choose time' },
+];
+
+// Predefined delivery time slots
+const timeSlots = [
+  { id: '1', label: 'Today, 2:00 PM - 3:00 PM' },
+  { id: '2', label: 'Today, 4:00 PM - 5:00 PM' },
+  { id: '3', label: 'Today, 6:00 PM - 7:00 PM' },
+  { id: '4', label: 'Tomorrow, 10:00 AM - 11:00 AM' },
+  { id: '5', label: 'Tomorrow, 12:00 PM - 1:00 PM' },
+  { id: '6', label: 'Tomorrow, 2:00 PM - 3:00 PM' },
+];
+
+export default function CheckoutScreen() {
+  const { user, loading } = useAuth();
+  const { cartItems, getCartTotals } = useCart();
+  const { addresses, loading: addressesLoading } = useAddresses();
+  const { paymentMethods, loading: paymentsLoading } = usePaymentMethods();
+  const { createOrder } = useOrders();
+  const { deliverySettings, loading: settingsLoading } = useSettings();
+  
+  const [selectedAddress, setSelectedAddress] = useState<string | null>(null);
+  const [selectedPayment, setSelectedPayment] = useState<string | null>(null);
+  const [selectedDelivery, setSelectedDelivery] = useState(deliveryTimes[0]);
+  const [isProcessing, setIsProcessing] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [selectedTimeSlot, setSelectedTimeSlot] = useState<string | null>(null);
+  const [isCashOnDelivery, setIsCashOnDelivery] = useState(false);
+  
+  const { subtotal, itemCount } = getCartTotals();
+  const isFreeDelivery = deliverySettings.enableFreeDelivery && 
+    deliverySettings.freeDeliveryThreshold !== null && 
+    subtotal >= deliverySettings.freeDeliveryThreshold;
+  const finalDeliveryFee = isFreeDelivery ? 0 : deliverySettings.deliveryFee;
+  const total = subtotal + finalDeliveryFee;
+
+  // Set default selections when data is loaded
+  useEffect(() => {
+    if (addresses.length > 0) {
+      const defaultAddress = addresses.find(addr => addr.is_default) || addresses[0];
+      setSelectedAddress(defaultAddress.id);
+    }
+    
+    if (paymentMethods.length > 0) {
+      const defaultPayment = paymentMethods.find(pm => pm.is_default) || paymentMethods[0];
+      setSelectedPayment(defaultPayment.id);
+    }
+  }, [addresses, paymentMethods]);
+
+  // Redirect to login if not authenticated
+  useEffect(() => {
+    if (!loading && !user) {
+      router.replace('/auth');
+    }
+  }, [user, loading]);
+
+  // Redirect to cart if cart is empty
+  useEffect(() => {
+    if (!loading && user && cartItems.length === 0) {
+      router.replace('/cart');
+    }
+  }, [cartItems, user, loading]);
+
+  const getScheduledDeliveryTime = () => {
+    if (selectedDelivery.id === '1') {
+      // ASAP - 45 minutes from now
+      return new Date(Date.now() + 45 * 60 * 1000).toISOString();
+    } else if (selectedTimeSlot) {
+      // Get the selected time slot
+      const slot = timeSlots.find(slot => slot.id === selectedTimeSlot);
+      if (slot) {
+        // Parse the time slot and create a date
+        const isToday = slot.label.startsWith('Today');
+        const timeMatch = slot.label.match(/(\d+):00 ([AP]M)/);
+        
+        if (timeMatch) {
+          const hours = parseInt(timeMatch[1]);
+          const isPM = timeMatch[2] === 'PM';
+          
+          const date = new Date();
+          if (!isToday) {
+            // Add a day for tomorrow
+            date.setDate(date.getDate() + 1);
+          }
+          
+          // Set hours (convert to 24-hour format if PM)
+          date.setHours(isPM && hours !== 12 ? hours + 12 : (hours === 12 && !isPM ? 0 : hours));
+          date.setMinutes(0);
+          date.setSeconds(0);
+          
+          return date.toISOString();
+        }
+      }
+    }
+    
+    // Default to 1 hour from now
+    return new Date(Date.now() + 60 * 60 * 1000).toISOString();
+  };
+
+  const handlePlaceOrder = async () => {
+    if (!selectedAddress) {
+      setError('Please select a delivery address');
+      return;
+    }
+    
+    if (!isCashOnDelivery && !selectedPayment) {
+      setError('Please select a payment method');
+      return;
+    }
+    
+    if (selectedDelivery.id === '2' && !selectedTimeSlot) {
+      setError('Please select a delivery time slot');
+      return;
+    }
+    
+    try {
+      setIsProcessing(true);
+      setError(null);
+      
+      const orderData: CreateOrderData = {
+        delivery_address_id: selectedAddress!,
+        payment_method_id: isCashOnDelivery ? null : selectedPayment!,
+        delivery_fee: finalDeliveryFee,
+        estimated_delivery: getScheduledDeliveryTime(),
+        is_cash_on_delivery: isCashOnDelivery
+      };
+      
+      const order = await createOrder(orderData);
+      
+      if (order) {
+        router.replace({
+          pathname: '/order-confirmation',
+          params: { orderId: order.id }
+        });
+      } else {
+        setError('Failed to create order. Please try again.');
+      }
+    } catch (err) {
+      console.error('Error placing order:', err);
+      setError('An unexpected error occurred. Please try again.');
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
+  // Show loading state while fetching data
+  if (addressesLoading || paymentsLoading || settingsLoading) {
+    return (
+      <View style={styles.loadingContainer}>
+        <ActivityIndicator size="large" color="#2ECC71" />
+        <Text style={styles.loadingText}>Loading checkout information...</Text>
+      </View>
+    );
+  }
+
+  return (
+    <View style={styles.container}>
+      <View style={styles.header}>
+        <TouchableOpacity
+          style={styles.backButton}
+          onPress={() => router.back()}>
+          <ChevronLeft size={24} color="#333" />
+        </TouchableOpacity>
+        <Text style={styles.title}>Checkout</Text>
+        <View style={{ width: 40 }} />
+      </View>
+
+      <ScrollView style={styles.content}>
+        {/* Error Message */}
+        {error && (
+          <View style={styles.errorContainer}>
+            <Text style={styles.errorText}>{error}</Text>
+          </View>
+        )}
+
+        {/* Delivery Address */}
+        <Animated.View entering={FadeIn.delay(100)} style={styles.section}>
+          <View style={styles.sectionHeader}>
+            <Text style={styles.sectionTitle}>Delivery Address</Text>
+            <TouchableOpacity 
+              style={styles.addButton}
+              onPress={() => router.push('/address')}>
+              <Plus size={16} color="#2ECC71" />
+              <Text style={styles.addButtonText}>Add New</Text>
+            </TouchableOpacity>
+          </View>
+          
+          {addresses.length === 0 ? (
+            <View style={styles.emptyState}>
+              <Text style={styles.emptyStateText}>No addresses found. Add a new address to continue.</Text>
+            </View>
+          ) : (
+            addresses.map((address) => (
+              <TouchableOpacity
+                key={address.id}
+                style={[
+                  styles.selectionCard,
+                  selectedAddress === address.id && styles.selectedCard,
+                ]}
+                onPress={() => setSelectedAddress(address.id)}>
+                <View style={styles.selectionContent}>
+                  <MapPin
+                    size={24}
+                    color={selectedAddress === address.id ? '#2ECC71' : '#666'}
+                  />
+                  <View style={styles.selectionInfo}>
+                    <Text style={styles.selectionTitle}>{address.type}</Text>
+                    <Text style={styles.selectionSubtitle}>{address.address}, {address.area}, {address.city}</Text>
+                  </View>
+                </View>
+                <ChevronRight size={20} color="#666" />
+              </TouchableOpacity>
+            ))
+          )}
+        </Animated.View>
+
+        {/* Payment Method */}
+        <Animated.View entering={FadeIn.delay(200)} style={styles.section}>
+          <View style={styles.sectionHeader}>
+            <Text style={styles.sectionTitle}>Payment Method</Text>
+            <TouchableOpacity 
+              style={styles.addButton}
+              onPress={() => router.push('/payment-methods')}>
+              <Plus size={16} color="#2ECC71" />
+              <Text style={styles.addButtonText}>Add New</Text>
+            </TouchableOpacity>
+          </View>
+          
+          {/* Cash on Delivery Option */}
+          <TouchableOpacity
+            style={[
+              styles.selectionCard,
+              isCashOnDelivery && styles.selectedCard,
+            ]}
+            onPress={() => {
+              setIsCashOnDelivery(true);
+              setSelectedPayment(null);
+            }}>
+            <View style={styles.selectionContent}>
+              <DollarSign
+                size={24}
+                color={isCashOnDelivery ? '#2ECC71' : '#666'}
+              />
+              <View style={styles.selectionInfo}>
+                <Text style={styles.selectionTitle}>Cash on Delivery</Text>
+                <Text style={styles.selectionSubtitle}>Pay when you receive your order</Text>
+              </View>
+            </View>
+            <ChevronRight size={20} color="#666" />
+          </TouchableOpacity>
+          
+          {/* Saved Payment Methods */}
+          {!isCashOnDelivery && (
+            <>
+              {paymentMethods.length === 0 ? (
+                <View style={styles.emptyState}>
+                  <Text style={styles.emptyStateText}>No payment methods found. Add a new payment method or use Cash on Delivery.</Text>
+                </View>
+              ) : (
+                paymentMethods.map((method) => (
+                  <TouchableOpacity
+                    key={method.id}
+                    style={[
+                      styles.selectionCard,
+                      selectedPayment === method.id && styles.selectedCard,
+                    ]}
+                    onPress={() => {
+                      setSelectedPayment(method.id);
+                      setIsCashOnDelivery(false);
+                    }}>
+                    <View style={styles.selectionContent}>
+                      <CreditCard
+                        size={24}
+                        color={selectedPayment === method.id ? '#2ECC71' : '#666'}
+                      />
+                      <View style={styles.selectionInfo}>
+                        <Text style={styles.selectionTitle}>{method.type}</Text>
+                        {method.last_four && (
+                          <Text style={styles.selectionSubtitle}>
+                            **** **** **** {method.last_four}
+                          </Text>
+                        )}
+                      </View>
+                    </View>
+                    <ChevronRight size={20} color="#666" />
+                  </TouchableOpacity>
+                ))
+              )}
+            </>
+          )}
+        </Animated.View>
+
+        {/* Delivery Time */}
+        <Animated.View entering={FadeIn.delay(300)} style={styles.section}>
+          <Text style={styles.sectionTitle}>Delivery Time</Text>
+          {deliveryTimes.map((delivery) => (
+            <TouchableOpacity
+              key={delivery.id}
+              style={[
+                styles.selectionCard,
+                selectedDelivery.id === delivery.id && styles.selectedCard,
+              ]}
+              onPress={() => {
+                setSelectedDelivery(delivery);
+                if (delivery.id === '1') {
+                  setSelectedTimeSlot(null);
+                }
+              }}>
+              <View style={styles.selectionContent}>
+                <Clock
+                  size={24}
+                  color={selectedDelivery.id === delivery.id ? '#2ECC71' : '#666'}
+                />
+                <View style={styles.selectionInfo}>
+                  <Text style={styles.selectionTitle}>{delivery.time}</Text>
+                  <Text style={styles.selectionSubtitle}>
+                    {delivery.estimate}
+                  </Text>
+                </View>
+              </View>
+            </TouchableOpacity>
+          ))}
+          
+          {/* Time Slots for Scheduled Delivery */}
+          {selectedDelivery.id === '2' && (
+            <View style={styles.timeSlotContainer}>
+              <Text style={styles.timeSlotTitle}>Select a Delivery Time Slot</Text>
+              {timeSlots.map((slot) => (
+                <TouchableOpacity
+                  key={slot.id}
+                  style={[
+                    styles.timeSlotCard,
+                    selectedTimeSlot === slot.id && styles.selectedTimeSlot,
+                  ]}
+                  onPress={() => setSelectedTimeSlot(slot.id)}>
+                  <Text 
+                    style={[
+                      styles.timeSlotText,
+                      selectedTimeSlot === slot.id && styles.selectedTimeSlotText,
+                    ]}>
+                    {slot.label}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+          )}
+        </Animated.View>
+
+        {/* Order Summary */}
+        <Animated.View entering={FadeIn.delay(400)} style={styles.section}>
+          <Text style={styles.sectionTitle}>Order Summary</Text>
+          <View style={styles.summary}>
+            <View style={styles.summaryRow}>
+              <Text style={styles.summaryLabel}>Subtotal ({itemCount} items)</Text>
+              <Text style={styles.summaryValue}>₹{subtotal.toFixed(2)}</Text>
+            </View>
+            
+            <View style={styles.summaryRow}>
+              <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                <Text style={styles.summaryLabel}>Delivery Fee</Text>
+                {isFreeDelivery && (
+                  <View style={styles.freeDeliveryBadge}>
+                    <Text style={styles.freeDeliveryText}>FREE</Text>
+                  </View>
+                )}
+              </View>
+              <Text style={[
+                styles.summaryValue,
+                isFreeDelivery ? { textDecorationLine: 'line-through', marginRight: 5 } : {}
+              ]}>
+                ₹{deliverySettings.deliveryFee.toFixed(2)}
+              </Text>
+              {isFreeDelivery && (
+                <Text style={[styles.summaryValue, { color: '#2ECC71' }]}>₹0.00</Text>
+              )}
+            </View>
+            
+            {deliverySettings.enableFreeDelivery && 
+              deliverySettings.freeDeliveryThreshold !== null && 
+              !isFreeDelivery && (
+              <Text style={styles.freeDeliveryInfo}>
+                Add ₹{(deliverySettings.freeDeliveryThreshold - subtotal).toFixed(2)} more for free delivery
+              </Text>
+            )}
+            
+            <View style={styles.divider} />
+            
+            <View style={styles.summaryRow}>
+              <Text style={styles.totalLabel}>Total</Text>
+              <Text style={styles.totalValue}>₹{total.toFixed(2)}</Text>
+            </View>
+            
+            <TouchableOpacity 
+              style={[styles.checkoutButton, isProcessing && styles.disabledButton]}
+              onPress={handlePlaceOrder}
+              disabled={isProcessing}>
+              {isProcessing ? (
+                <ActivityIndicator size="small" color="#fff" />
+              ) : (
+                <Text style={styles.checkoutButtonText}>Place Order</Text>
+              )}
+            </TouchableOpacity>
+          </View>
+        </Animated.View>
+      </ScrollView>
+
+      <View style={styles.footer}>
+        <TouchableOpacity 
+          style={[
+            styles.placeOrderButton, 
+            (isProcessing || !selectedAddress || (!isCashOnDelivery && !selectedPayment)) && styles.disabledButton
+          ]}
+          onPress={handlePlaceOrder}
+          disabled={isProcessing || !selectedAddress || (!isCashOnDelivery && !selectedPayment)}>
+          {isProcessing ? (
+            <ActivityIndicator size="small" color="#fff" />
+          ) : (
+            <Text style={styles.placeOrderText}>Place Order</Text>
+          )}
+        </TouchableOpacity>
+      </View>
+    </View>
+  );
+}
+
+const styles = StyleSheet.create({
+  container: {
+    flex: 1,
+    backgroundColor: '#fff',
+  },
+  header: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 20,
+    paddingTop: 60,
+    paddingBottom: 20,
+    backgroundColor: '#fff',
+    borderBottomWidth: 1,
+    borderBottomColor: '#f5f5f5',
+  },
+  backButton: {
+    width: 40,
+    height: 40,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  title: {
+    fontFamily: 'Poppins-SemiBold',
+    fontSize: 20,
+    color: '#333',
+  },
+  content: {
+    flex: 1,
+    padding: 20,
+  },
+  section: {
+    marginBottom: 24,
+  },
+  sectionHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 16,
+  },
+  sectionTitle: {
+    fontFamily: 'Poppins-SemiBold',
+    fontSize: 18,
+    color: '#333',
+    marginBottom: 16,
+  },
+  addButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+  },
+  addButtonText: {
+    fontFamily: 'Poppins-Medium',
+    fontSize: 14,
+    color: '#2ECC71',
+  },
+  selectionCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    backgroundColor: '#fff',
+    borderRadius: 12,
+    padding: 16,
+    marginBottom: 12,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 4,
+    elevation: 3,
+  },
+  selectedCard: {
+    borderColor: '#2ECC71',
+    borderWidth: 2,
+  },
+  selectionContent: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flex: 1,
+  },
+  selectionInfo: {
+    marginLeft: 16,
+    flex: 1,
+  },
+  selectionTitle: {
+    fontFamily: 'Poppins-Medium',
+    fontSize: 16,
+    color: '#333',
+    marginBottom: 4,
+  },
+  selectionSubtitle: {
+    fontFamily: 'Poppins-Regular',
+    fontSize: 14,
+    color: '#666',
+  },
+  summary: {
+    backgroundColor: '#fff',
+    borderRadius: 12,
+    padding: 16,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 4,
+    elevation: 3,
+  },
+  summaryTitle: {
+    fontFamily: 'Poppins-SemiBold',
+    fontSize: 18,
+    color: '#333',
+    marginBottom: 16,
+  },
+  summaryRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 12,
+  },
+  summaryLabel: {
+    fontFamily: 'Poppins-Regular',
+    fontSize: 14,
+    color: '#666',
+  },
+  summaryValue: {
+    fontFamily: 'Poppins-Medium',
+    fontSize: 14,
+    color: '#333',
+  },
+  divider: {
+    height: 1,
+    backgroundColor: '#f5f5f5',
+    marginVertical: 12,
+  },
+  totalLabel: {
+    fontFamily: 'Poppins-SemiBold',
+    fontSize: 16,
+    color: '#333',
+  },
+  totalValue: {
+    fontFamily: 'Poppins-SemiBold',
+    fontSize: 20,
+    color: '#2ECC71',
+  },
+  footer: {
+    padding: 20,
+    backgroundColor: '#fff',
+    borderTopWidth: 1,
+    borderTopColor: '#f5f5f5',
+  },
+  placeOrderButton: {
+    backgroundColor: '#2ECC71',
+    borderRadius: 12,
+    padding: 16,
+    alignItems: 'center',
+  },
+  placeOrderText: {
+    fontFamily: 'Poppins-SemiBold',
+    fontSize: 16,
+    color: '#fff',
+  },
+  disabledButton: {
+    backgroundColor: '#E0E0E0',
+  },
+  loadingContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 20,
+  },
+  loadingText: {
+    fontFamily: 'Poppins-Regular',
+    fontSize: 16,
+    color: '#666',
+    marginTop: 16,
+  },
+  errorContainer: {
+    backgroundColor: '#FFEBEE',
+    borderRadius: 12,
+    padding: 16,
+    marginBottom: 16,
+  },
+  errorText: {
+    fontFamily: 'Poppins-Medium',
+    fontSize: 14,
+    color: '#D32F2F',
+  },
+  emptyState: {
+    backgroundColor: '#f5f5f5',
+    borderRadius: 12,
+    padding: 16,
+    alignItems: 'center',
+  },
+  emptyStateText: {
+    fontFamily: 'Poppins-Regular',
+    fontSize: 14,
+    color: '#666',
+    textAlign: 'center',
+  },
+  timeSlotContainer: {
+    marginTop: 16,
+  },
+  timeSlotTitle: {
+    fontFamily: 'Poppins-Medium',
+    fontSize: 16,
+    color: '#333',
+    marginBottom: 12,
+  },
+  timeSlotCard: {
+    backgroundColor: '#f5f5f5',
+    borderRadius: 8,
+    padding: 12,
+    marginBottom: 8,
+    borderWidth: 1,
+    borderColor: '#f5f5f5',
+  },
+  selectedTimeSlot: {
+    borderColor: '#2ECC71',
+    backgroundColor: '#E8F5E9',
+  },
+  timeSlotText: {
+    fontFamily: 'Poppins-Regular',
+    fontSize: 14,
+    color: '#333',
+  },
+  selectedTimeSlotText: {
+    fontFamily: 'Poppins-Medium',
+    color: '#2ECC71',
+  },
+  freeDeliveryBadge: {
+    backgroundColor: '#2ECC71',
+    borderRadius: 4,
+    padding: 2,
+    marginLeft: 8,
+  },
+  freeDeliveryText: {
+    fontFamily: 'Poppins-Medium',
+    fontSize: 12,
+    color: '#fff',
+  },
+  freeDeliveryInfo: {
+    fontFamily: 'Poppins-Regular',
+    fontSize: 12,
+    color: '#666',
+    marginBottom: 12,
+  },
+  checkoutButton: {
+    backgroundColor: '#2ECC71',
+    borderRadius: 12,
+    padding: 16,
+    alignItems: 'center',
+  },
+  checkoutButtonText: {
+    fontFamily: 'Poppins-SemiBold',
+    fontSize: 16,
+    color: '#fff',
+  },
+});
