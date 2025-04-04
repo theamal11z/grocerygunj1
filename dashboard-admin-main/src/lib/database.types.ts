@@ -238,9 +238,14 @@ export type Database = {
           name: string
           description: string | null
           price: number
-          stock: number
           category_id: string | null
-          image_url: string | null
+          image_urls: string[]
+          in_stock: boolean
+          unit: string
+          nutrition: Json | null
+          rating: number | null
+          review_count: number | null
+          discount: number | null
           created_at: string
           updated_at: string | null
         }
@@ -249,9 +254,14 @@ export type Database = {
           name: string
           description?: string | null
           price: number
-          stock: number
           category_id?: string | null
-          image_url?: string | null
+          image_urls?: string[]
+          in_stock?: boolean
+          unit: string
+          nutrition?: Json | null
+          rating?: number | null
+          review_count?: number | null
+          discount?: number | null
           created_at?: string
           updated_at?: string | null
         }
@@ -260,9 +270,14 @@ export type Database = {
           name?: string
           description?: string | null
           price?: number
-          stock?: number
           category_id?: string | null
-          image_url?: string | null
+          image_urls?: string[]
+          in_stock?: boolean
+          unit?: string
+          nutrition?: Json | null
+          rating?: number | null
+          review_count?: number | null
+          discount?: number | null
           created_at?: string
           updated_at?: string | null
         }

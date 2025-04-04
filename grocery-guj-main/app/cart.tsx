@@ -1,13 +1,52 @@
-import React, { useEffect } from 'react';
-import { View, Text, ScrollView, Image, TouchableOpacity, StyleSheet, ActivityIndicator } from 'react-native';
-import { Minus, Plus, ChevronLeft, Trash2, ShoppingCart, Ticket, X } from 'lucide-react-native';
+import React, { useEffect, useState, useCallback } from 'react';
+import { 
+  View, 
+  Text, 
+  FlatList, 
+  Image, 
+  TouchableOpacity, 
+  StyleSheet, 
+  ActivityIndicator,
+  Alert,
+  RefreshControl,
+  StatusBar
+} from 'react-native';
+import { 
+  Minus, 
+  Plus, 
+  ChevronLeft, 
+  Trash2,
+  ShoppingCart,
+  ShoppingBag
+} from 'lucide-react-native';
 import { router } from 'expo-router';
-import Animated, { FadeInUp, FadeOutDown } from 'react-native-reanimated';
+import Animated, { 
+  FadeInUp, 
+  FadeOutDown, 
+  SlideInRight, 
+  SlideOutLeft,
+  FadeIn,
+  FadeOut,
+  useAnimatedStyle,
+  useSharedValue,
+  withTiming
+} from 'react-native-reanimated';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useCart } from '@/hooks/useCart';
 import { useAuth } from '@/hooks/useAuth';
 import { useSettings } from '@/hooks/useSettings';
+import { CartItemWithProduct } from '@/lib/CartContext';
+
+const AnimatedTouchable = Animated.createAnimatedComponent(TouchableOpacity);
+
+// Define a type for the renderItem parameter
+type RenderItemParams = {
+  item: CartItemWithProduct;
+  index: number;
+};
 
 export default function CartScreen() {
+  const insets = useSafeAreaInsets();
   const { 
     cartItems, 
     loading: cartLoading, 
@@ -15,53 +54,161 @@ export default function CartScreen() {
     updateCartItemQuantity, 
     removeFromCart,
     getCartTotals,
-    appliedCoupon
+    fetchCartItems: refreshCartItems
   } = useCart();
   const { user, loading: authLoading } = useAuth();
   const { deliverySettings, loading: settingsLoading } = useSettings();
 
-  const { subtotal, itemCount, discountAmount, discountedSubtotal } = getCartTotals();
+  // Local state
+  const [refreshing, setRefreshing] = useState(false);
+  const [processingItemId, setProcessingItemId] = useState<string | null>(null);
+  
+  // Get cart totals
+  const { subtotal, itemCount, discountedSubtotal } = getCartTotals();
   const isFreeDelivery = deliverySettings.enableFreeDelivery && 
     deliverySettings.freeDeliveryThreshold !== null && 
     subtotal >= deliverySettings.freeDeliveryThreshold;
   const finalDeliveryFee = isFreeDelivery ? 0 : deliverySettings.deliveryFee;
   const total = discountedSubtotal + finalDeliveryFee;
 
-  // Fetch settings on component mount
-  useEffect(() => {
-    // The useSettings hook handles fetch on mount
-  }, []);
+  // Refresh cart data
+  const handleRefresh = useCallback(async () => {
+    setRefreshing(true);
+    try {
+      // Re-fetch cart items using the renamed function
+      await refreshCartItems();
+    } catch (error) {
+      console.error("Error refreshing cart:", error);
+    } finally {
+      setRefreshing(false);
+    }
+  }, [refreshCartItems]);
 
+  // Update item quantity with loading state
   const updateQuantity = async (id: string, change: number) => {
+    setProcessingItemId(id);
+    try {
     const item = cartItems.find(item => item.id === id);
     if (item) {
       const newQuantity = item.quantity + change;
       if (newQuantity > 0) {
         await updateCartItemQuantity(id, newQuantity);
       }
+      }
+    } catch (error) {
+      Alert.alert('Error', 'Failed to update quantity');
+    } finally {
+      setProcessingItemId(null);
     }
   };
 
+  // Remove item with loading state
   const removeItem = async (id: string) => {
+    setProcessingItemId(`remove-${id}`);
+    try {
     await removeFromCart(id);
+    } catch (error) {
+      Alert.alert('Error', 'Failed to remove item');
+    } finally {
+      setProcessingItemId(null);
+    }
   };
 
-  // If user is not logged in, show login prompt
-  if (!authLoading && !user) {
-    return (
-      <View style={styles.container}>
-        <View style={styles.header}>
+  // Render cart item component
+  const renderItem = useCallback(({ item, index }: RenderItemParams) => (
+    <Animated.View
+      key={item.id}
+      entering={SlideInRight.delay(index * 100).duration(300)}
+      exiting={SlideOutLeft.duration(200)}
+      style={styles.cartItem}>
+      <TouchableOpacity
+        onPress={() => router.push({
+          pathname: '/product/[id]',
+          params: { id: item.product_id }
+        })}
+        style={styles.itemImageContainer}
+      >
+        <Image 
+          source={{ uri: item.product?.image_urls?.[0] || '' }} 
+          style={styles.itemImage} 
+          resizeMode="cover"
+        />
+      </TouchableOpacity>
+      
+      <View style={styles.itemInfo}>
+        <View style={styles.itemHeader}>
+          <Text style={styles.itemName} numberOfLines={2}>{item.product?.name}</Text>
           <TouchableOpacity
-            style={styles.backButton}
-            onPress={() => router.back()}>
-            <ChevronLeft size={24} color="#333" />
+            style={styles.removeButton}
+            onPress={() => removeItem(item.id)}
+            disabled={processingItemId === `remove-${item.id}`}>
+            {processingItemId === `remove-${item.id}` ? (
+              <ActivityIndicator size="small" color="#FF4B4B" />
+            ) : (
+              <Trash2 size={18} color="#FF4B4B" />
+            )}
           </TouchableOpacity>
-          <Text style={styles.title}>Shopping Cart</Text>
-          <View style={{ width: 40 }} />
         </View>
         
+        <Text style={styles.itemUnit}>{item.product?.unit}</Text>
+        
+        <View style={styles.itemFooter}>
+          <Text style={styles.itemPrice}>₹{item.product?.price}</Text>
+          
+          <View style={styles.quantityControls}>
+            <TouchableOpacity
+              style={[
+                styles.quantityButton,
+                item.quantity === 1 && styles.quantityButtonDisabled
+              ]}
+              onPress={() => updateQuantity(item.id, -1)}
+              disabled={item.quantity === 1 || processingItemId === item.id}>
+              <Minus size={14} color={item.quantity === 1 ? "#ccc" : "#666"} />
+            </TouchableOpacity>
+            
+            {processingItemId === item.id ? (
+              <View style={styles.quantityLoadingContainer}>
+                <ActivityIndicator size="small" color="#2ECC71" />
+              </View>
+            ) : (
+              <Text style={styles.quantity}>{item.quantity}</Text>
+            )}
+            
+            <TouchableOpacity
+              style={styles.quantityButton}
+              onPress={() => updateQuantity(item.id, 1)}
+              disabled={processingItemId === item.id}>
+              <Plus size={14} color="#666" />
+            </TouchableOpacity>
+          </View>
+        </View>
+      </View>
+    </Animated.View>
+  ), [processingItemId]);
+
+  // Empty cart component
+  const EmptyCart = () => (
+    <View style={styles.emptyStateContainer}>
+      <ShoppingBag size={70} color="#f0f0f0" />
+      <Text style={styles.emptyStateTitle}>Your Cart is Empty</Text>
+      <Text style={styles.emptyStateText}>
+        Add items to your cart to see them here
+      </Text>
+      <TouchableOpacity
+        style={styles.shopNowButton}
+        onPress={() => router.push('/(tabs)')}>
+        <Text style={styles.shopNowButtonText}>Shop Now</Text>
+      </TouchableOpacity>
+    </View>
+  );
+  
+  // Login prompt component
+  const LoginPrompt = () => (
         <View style={styles.emptyStateContainer}>
-          <ShoppingCart size={64} color="#ccc" />
+      <Animated.View entering={FadeIn.duration(400)}>
+        <ShoppingCart size={70} color="#f0f0f0" />
+      </Animated.View>
+      <Animated.View entering={FadeIn.delay(200).duration(400)}>
           <Text style={styles.emptyStateTitle}>Please Sign In</Text>
           <Text style={styles.emptyStateText}>
             You need to be signed in to view your cart
@@ -71,15 +218,43 @@ export default function CartScreen() {
             onPress={() => router.push('/auth')}>
             <Text style={styles.signInButtonText}>Sign In</Text>
           </TouchableOpacity>
+      </Animated.View>
         </View>
+  );
+  
+  // Loading component
+  const Loading = () => (
+    <View style={styles.emptyStateContainer}>
+      <ActivityIndicator size="large" color="#2ECC71" />
+      <Text style={styles.loadingText}>Loading your cart...</Text>
+      </View>
+    );
+
+  // If user is not logged in, show login prompt
+  if (!authLoading && !user) {
+    return (
+      <View style={[styles.container, { paddingTop: insets.top }]}>
+        <StatusBar barStyle="dark-content" />
+        <View style={styles.header}>
+          <TouchableOpacity
+            style={styles.backButton}
+            onPress={() => router.back()}>
+            <ChevronLeft size={24} color="#333" />
+          </TouchableOpacity>
+          <Text style={styles.title}>Shopping Cart</Text>
+          <View style={{ width: 40 }} />
+        </View>
+        
+        <LoginPrompt />
       </View>
     );
   }
 
   // Show loading state
-  if (authLoading || cartLoading || settingsLoading) {
+  if (authLoading || (cartLoading && !refreshing) || settingsLoading) {
     return (
-      <View style={styles.container}>
+      <View style={[styles.container, { paddingTop: insets.top }]}>
+        <StatusBar barStyle="dark-content" />
         <View style={styles.header}>
           <TouchableOpacity
             style={styles.backButton}
@@ -90,118 +265,55 @@ export default function CartScreen() {
           <View style={{ width: 40 }} />
         </View>
         
-        <View style={styles.emptyStateContainer}>
-          <ActivityIndicator size="large" color="#2ECC71" />
-          <Text style={styles.loadingText}>Loading your cart...</Text>
-        </View>
-      </View>
-    );
-  }
-
-  // Show empty cart state
-  if (cartItems.length === 0) {
-    return (
-      <View style={styles.container}>
-        <View style={styles.header}>
-          <TouchableOpacity
-            style={styles.backButton}
-            onPress={() => router.back()}>
-            <ChevronLeft size={24} color="#333" />
-          </TouchableOpacity>
-          <Text style={styles.title}>Shopping Cart</Text>
-          <View style={{ width: 40 }} />
-        </View>
-        
-        <View style={styles.emptyStateContainer}>
-          <ShoppingCart size={64} color="#ccc" />
-          <Text style={styles.emptyStateTitle}>Your Cart is Empty</Text>
-          <Text style={styles.emptyStateText}>
-            Add items to your cart to see them here
-          </Text>
-          <TouchableOpacity
-            style={styles.shopNowButton}
-            onPress={() => router.push('/(tabs)')}>
-            <Text style={styles.shopNowButtonText}>Shop Now</Text>
-          </TouchableOpacity>
-        </View>
+        <Loading />
       </View>
     );
   }
 
   return (
-    <View style={styles.container}>
+    <View style={[styles.container, { paddingTop: insets.top }]}>
+      <StatusBar barStyle="dark-content" />
       <View style={styles.header}>
         <TouchableOpacity
           style={styles.backButton}
           onPress={() => router.back()}>
           <ChevronLeft size={24} color="#333" />
         </TouchableOpacity>
-        <Text style={styles.title}>Shopping Cart ({itemCount})</Text>
+        <Text style={styles.title}>Shopping Cart {itemCount > 0 && `(${itemCount})`}</Text>
         <View style={{ width: 40 }} />
       </View>
 
-      <ScrollView style={styles.itemsList}>
-        {cartItems.map((item) => (
-          <Animated.View
-            key={item.id}
-            entering={FadeInUp}
-            exiting={FadeOutDown}
-            style={styles.cartItem}>
-            <Image source={{ uri: item.product?.image_urls?.[0] || '' }} style={styles.itemImage} />
-            <View style={styles.itemInfo}>
-              <Text style={styles.itemName}>{item.product?.name}</Text>
-              <Text style={styles.itemPrice}>₹{item.product?.price}</Text>
-              <View style={styles.quantityControls}>
-                <TouchableOpacity
-                  style={styles.quantityButton}
-                  onPress={() => updateQuantity(item.id, -1)}>
-                  <Minus size={16} color="#666" />
-                </TouchableOpacity>
-                <Text style={styles.quantity}>{item.quantity}</Text>
-                <TouchableOpacity
-                  style={styles.quantityButton}
-                  onPress={() => updateQuantity(item.id, 1)}>
-                  <Plus size={16} color="#666" />
-                </TouchableOpacity>
-              </View>
-            </View>
-            <TouchableOpacity
-              style={styles.removeButton}
-              onPress={() => removeItem(item.id)}>
-              <Trash2 size={20} color="#FF4B4B" />
-            </TouchableOpacity>
-          </Animated.View>
-        ))}
-      </ScrollView>
+      <FlatList
+        data={cartItems}
+        renderItem={renderItem}
+        keyExtractor={(item) => item.id}
+        contentContainerStyle={[
+          styles.listContainer,
+          cartItems.length === 0 && styles.emptyListContainer
+        ]}
+        showsVerticalScrollIndicator={false}
+        ListEmptyComponent={EmptyCart}
+        refreshControl={
+          <RefreshControl
+            refreshing={refreshing}
+            onRefresh={handleRefresh}
+            colors={['#2ECC71']}
+            tintColor="#2ECC71"
+          />
+        }
+      />
 
-      {/* Coupon Information */}
-      {appliedCoupon && (
-        <View style={styles.appliedCouponContainer}>
-          <View style={styles.couponInfo}>
-            <Ticket size={18} color="#2ECC71" />
-            <View style={styles.couponDetails}>
-              <Text style={styles.couponCode}>{appliedCoupon.code}</Text>
-              <Text style={styles.couponDiscount}>{appliedCoupon.discount} discount applied</Text>
-            </View>
-          </View>
-        </View>
-      )}
-
+      {cartItems.length > 0 && (
+        <View style={styles.bottomContainer}>
+          {/* Order Summary */}
       <View style={styles.summary}>
         <View style={styles.summaryRow}>
           <Text style={styles.summaryLabel}>Subtotal</Text>
           <Text style={styles.summaryValue}>₹{subtotal.toFixed(2)}</Text>
         </View>
         
-        {appliedCoupon && discountAmount > 0 && (
           <View style={styles.summaryRow}>
-            <Text style={styles.summaryLabel}>Discount ({appliedCoupon.code})</Text>
-            <Text style={[styles.summaryValue, styles.discountText]}>-₹{discountAmount.toFixed(2)}</Text>
-          </View>
-        )}
-        
-        <View style={styles.summaryRow}>
-          <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+              <View style={styles.deliveryFeeContainer}>
             <Text style={styles.summaryLabel}>Delivery Fee</Text>
             {isFreeDelivery && (
               <View style={styles.freeDeliveryBadge}>
@@ -209,26 +321,40 @@ export default function CartScreen() {
               </View>
             )}
           </View>
-          <Text style={[
-            styles.summaryValue,
-            isFreeDelivery ? { textDecorationLine: 'line-through', marginRight: 5 } : {}
-          ]}>
+              <View style={styles.deliveryFeeValueContainer}>
+                {isFreeDelivery ? (
+                  <>
+                    <Text style={[styles.summaryValue, styles.strikethrough]}>
             ₹{deliverySettings.deliveryFee.toFixed(2)}
           </Text>
-          {isFreeDelivery && (
-            <Text style={[styles.summaryValue, { color: '#2ECC71' }]}>₹0.00</Text>
-          )}
+                    <Text style={styles.freeValue}>₹0.00</Text>
+                  </>
+                ) : (
+                  <Text style={styles.summaryValue}>₹{deliverySettings.deliveryFee.toFixed(2)}</Text>
+                )}
+              </View>
         </View>
         
         {deliverySettings.enableFreeDelivery && 
           deliverySettings.freeDeliveryThreshold !== null && 
           !isFreeDelivery && (
+              <View style={styles.freeDeliveryInfoContainer}>
+                <View style={styles.progressBarContainer}>
+                  <View 
+                    style={[
+                      styles.progressBar,
+                      { width: `${Math.min(100, (subtotal / deliverySettings.freeDeliveryThreshold) * 100)}%` }
+                    ]} 
+                  />
+                </View>
           <Text style={styles.freeDeliveryInfo}>
             Add ₹{(deliverySettings.freeDeliveryThreshold - subtotal).toFixed(2)} more for free delivery
           </Text>
+              </View>
         )}
         
         <View style={styles.divider} />
+            
         <View style={styles.summaryRow}>
           <Text style={styles.totalLabel}>Total</Text>
           <Text style={styles.totalValue}>₹{total.toFixed(2)}</Text>
@@ -236,16 +362,12 @@ export default function CartScreen() {
 
         <TouchableOpacity
           style={styles.checkoutButton}
-          onPress={() => {
-            if (user) {
-              router.push('/checkout');
-            } else {
-              router.push('/auth');
-            }
-          }}>
+              onPress={() => router.push('/checkout')}>
           <Text style={styles.checkoutButtonText}>Proceed to Checkout</Text>
         </TouchableOpacity>
       </View>
+        </View>
+      )}
     </View>
   );
 }
@@ -260,9 +382,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'space-between',
     paddingHorizontal: 20,
-    paddingTop: 60,
-    paddingBottom: 20,
-    backgroundColor: '#fff',
+    paddingVertical: 16,
     borderBottomWidth: 1,
     borderBottomColor: '#f5f5f5',
   },
@@ -274,122 +394,14 @@ const styles = StyleSheet.create({
   },
   title: {
     fontFamily: 'Poppins-SemiBold',
-    fontSize: 20,
-    color: '#333',
-  },
-  itemsList: {
-    flex: 1,
-    padding: 20,
-  },
-  cartItem: {
-    flexDirection: 'row',
-    backgroundColor: '#fff',
-    borderRadius: 12,
-    marginBottom: 16,
-    padding: 12,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 4,
-    elevation: 3,
-  },
-  itemImage: {
-    width: 80,
-    height: 80,
-    borderRadius: 8,
-  },
-  itemInfo: {
-    flex: 1,
-    marginLeft: 16,
-  },
-  itemName: {
-    fontFamily: 'Poppins-Medium',
-    fontSize: 16,
-    color: '#333',
-    marginBottom: 4,
-  },
-  itemPrice: {
-    fontFamily: 'Poppins-SemiBold',
     fontSize: 18,
-    color: '#2ECC71',
-    marginBottom: 8,
-  },
-  quantityControls: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 12,
-  },
-  quantityButton: {
-    width: 32,
-    height: 32,
-    backgroundColor: '#f5f5f5',
-    borderRadius: 16,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  quantity: {
-    fontFamily: 'Poppins-Medium',
-    fontSize: 16,
     color: '#333',
-    minWidth: 24,
-    textAlign: 'center',
-  },
-  removeButton: {
-    padding: 8,
-  },
-  summary: {
-    padding: 20,
-    backgroundColor: '#fff',
-    borderTopWidth: 1,
-    borderTopColor: '#f5f5f5',
-  },
-  summaryRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    marginBottom: 12,
-  },
-  summaryLabel: {
-    fontFamily: 'Poppins-Regular',
-    fontSize: 14,
-    color: '#666',
-  },
-  summaryValue: {
-    fontFamily: 'Poppins-Medium',
-    fontSize: 14,
-    color: '#333',
-  },
-  divider: {
-    height: 1,
-    backgroundColor: '#f5f5f5',
-    marginVertical: 12,
-  },
-  totalLabel: {
-    fontFamily: 'Poppins-SemiBold',
-    fontSize: 16,
-    color: '#333',
-  },
-  totalValue: {
-    fontFamily: 'Poppins-SemiBold',
-    fontSize: 20,
-    color: '#2ECC71',
-  },
-  checkoutButton: {
-    backgroundColor: '#2ECC71',
-    borderRadius: 12,
-    padding: 16,
-    alignItems: 'center',
-    marginTop: 16,
-  },
-  checkoutButtonText: {
-    fontFamily: 'Poppins-SemiBold',
-    fontSize: 16,
-    color: '#fff',
   },
   emptyStateContainer: {
     flex: 1,
-    justifyContent: 'center',
     alignItems: 'center',
-    padding: 20,
+    justifyContent: 'center',
+    paddingHorizontal: 24,
   },
   emptyStateTitle: {
     fontFamily: 'Poppins-SemiBold',
@@ -400,16 +412,16 @@ const styles = StyleSheet.create({
   },
   emptyStateText: {
     fontFamily: 'Poppins-Regular',
-    fontSize: 16,
+    fontSize: 14,
     color: '#666',
     textAlign: 'center',
     marginBottom: 24,
   },
   shopNowButton: {
     backgroundColor: '#2ECC71',
-    borderRadius: 12,
-    paddingVertical: 12,
     paddingHorizontal: 24,
+    paddingVertical: 12,
+    borderRadius: 12,
   },
   shopNowButtonText: {
     fontFamily: 'Poppins-SemiBold',
@@ -418,9 +430,10 @@ const styles = StyleSheet.create({
   },
   signInButton: {
     backgroundColor: '#2ECC71',
-    borderRadius: 12,
-    paddingVertical: 12,
     paddingHorizontal: 24,
+    paddingVertical: 12,
+    borderRadius: 12,
+    marginTop: 8,
   },
   signInButtonText: {
     fontFamily: 'Poppins-SemiBold',
@@ -433,53 +446,200 @@ const styles = StyleSheet.create({
     color: '#666',
     marginTop: 16,
   },
-  freeDeliveryBadge: {
-    backgroundColor: '#2ECC71',
-    borderRadius: 4,
+  listContainer: {
+    padding: 16,
+    paddingBottom: 100,
+  },
+  emptyListContainer: {
+    flex: 1,
+  },
+  cartItem: {
+    flexDirection: 'row',
+    backgroundColor: '#fff',
+    marginBottom: 16,
+    borderRadius: 12,
+    padding: 12,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.05,
+    shadowRadius: 2,
+    elevation: 2,
+  },
+  itemImageContainer: {
+    width: 70,
+    height: 70,
+    borderRadius: 8,
+    overflow: 'hidden',
+    backgroundColor: '#f5f5f5',
+  },
+  itemImage: {
+    width: '100%',
+    height: '100%',
+  },
+  itemInfo: {
+    flex: 1,
+    marginLeft: 12,
+  },
+  itemHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginBottom: 4,
+  },
+  itemName: {
+    fontFamily: 'Poppins-Medium',
+    fontSize: 16,
+    color: '#333',
+    flex: 1,
+    marginRight: 8,
+  },
+  removeButton: {
     padding: 4,
+  },
+  itemUnit: {
+    fontFamily: 'Poppins-Regular',
+    fontSize: 14,
+    color: '#666',
+    marginBottom: 8,
+  },
+  itemFooter: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  itemPrice: {
+    fontFamily: 'Poppins-SemiBold',
+    fontSize: 16,
+    color: '#333',
+  },
+  quantityControls: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#f9f9f9',
+    borderRadius: 8,
+    overflow: 'hidden',
+  },
+  quantityButton: {
+    width: 32,
+    height: 32,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  quantityButtonDisabled: {
+    opacity: 0.5,
+  },
+  quantity: {
+    fontFamily: 'Poppins-Medium',
+    fontSize: 14,
+    color: '#333',
+    paddingHorizontal: 8,
+    minWidth: 30,
+    textAlign: 'center',
+  },
+  quantityLoadingContainer: {
+    paddingHorizontal: 12,
+  },
+  bottomContainer: {
+    position: 'absolute',
+    bottom: 0,
+    left: 0,
+    right: 0,
+    backgroundColor: '#fff',
+    borderTopWidth: 1,
+    borderTopColor: '#f5f5f5',
+  },
+  summary: {
+    padding: 16,
+  },
+  summaryRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 12,
+  },
+  summaryLabel: {
+    fontFamily: 'Poppins-Regular',
+    fontSize: 14,
+    color: '#666',
+  },
+  summaryValue: {
+    fontFamily: 'Poppins-Medium',
+    fontSize: 14,
+    color: '#333',
+  },
+  deliveryFeeContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  freeDeliveryBadge: {
+    backgroundColor: '#E8F5E9',
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 4,
     marginLeft: 8,
   },
   freeDeliveryText: {
     fontFamily: 'Poppins-Medium',
+    fontSize: 10,
+    color: '#2ECC71',
+  },
+  deliveryFeeValueContainer: {
+    alignItems: 'flex-end',
+  },
+  strikethrough: {
+    textDecorationLine: 'line-through',
+    color: '#999',
     fontSize: 12,
-    color: '#fff',
+  },
+  freeValue: {
+    fontFamily: 'Poppins-Medium',
+    fontSize: 14,
+    color: '#2ECC71',
+  },
+  freeDeliveryInfoContainer: {
+    marginBottom: 12,
+  },
+  progressBarContainer: {
+    height: 4,
+    backgroundColor: '#f5f5f5',
+    borderRadius: 2,
+    marginBottom: 8,
+  },
+  progressBar: {
+    height: '100%',
+    backgroundColor: '#2ECC71',
+    borderRadius: 2,
   },
   freeDeliveryInfo: {
     fontFamily: 'Poppins-Regular',
     fontSize: 12,
     color: '#666',
-    marginBottom: 12,
   },
-  appliedCouponContainer: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    backgroundColor: '#F1FFF6',
-    padding: 12,
-    borderRadius: 8,
-    marginHorizontal: 20,
-    marginBottom: 15,
-    borderWidth: 1,
-    borderColor: '#D9F3E3',
+  divider: {
+    height: 1,
+    backgroundColor: '#f5f5f5',
+    marginVertical: 16,
   },
-  couponInfo: {
-    flexDirection: 'row',
-    alignItems: 'center',
-  },
-  couponDetails: {
-    marginLeft: 10,
-  },
-  couponCode: {
-    fontWeight: '600',
-    fontSize: 14,
+  totalLabel: {
+    fontFamily: 'Poppins-SemiBold',
+    fontSize: 16,
     color: '#333',
   },
-  couponDiscount: {
-    fontSize: 12,
+  totalValue: {
+    fontFamily: 'Poppins-SemiBold',
+    fontSize: 18,
     color: '#2ECC71',
-    marginTop: 2,
   },
-  discountText: {
-    color: '#2ECC71',
+  checkoutButton: {
+    backgroundColor: '#2ECC71',
+    borderRadius: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 16,
+    marginTop: 16,
+  },
+  checkoutButtonText: {
+    fontFamily: 'Poppins-SemiBold',
+    fontSize: 16,
+    color: '#fff',
   },
 });

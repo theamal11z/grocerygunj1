@@ -1,29 +1,86 @@
 import React, { useState, useCallback } from 'react';
-import { View, Text, ScrollView, Image, TouchableOpacity, StyleSheet, ActivityIndicator, Alert, RefreshControl } from 'react-native';
-import { Heart, Trash2, ShoppingBag } from 'lucide-react-native';
+import { 
+  View, 
+  Text, 
+  FlatList, 
+  TouchableOpacity, 
+  StyleSheet, 
+  ActivityIndicator, 
+  Alert, 
+  RefreshControl,
+  StatusBar
+} from 'react-native';
+import { Trash2, ShoppingBag, Search, Grid, List } from 'lucide-react-native';
 import { useWishlist } from '@/hooks/useWishlist';
 import { useCart } from '@/hooks/useCart';
 import { LoadingSpinner } from '@/components/LoadingSpinner';
 import { ErrorMessage } from '@/components/ErrorMessage';
 import { router, useFocusEffect } from 'expo-router';
 import { useAuth } from '@/hooks/useAuth';
+import Animated, { 
+  FadeIn, 
+  SlideInDown,
+  useAnimatedStyle,
+  useSharedValue,
+  withTiming,
+} from 'react-native-reanimated';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
+
+// Import wishlist components
+import { WishlistItem } from '@/components/wishlist/WishlistItem';
+import { CategoryFilter } from '@/components/wishlist/CategoryFilter';
+import { EmptyWishlist } from '@/components/wishlist/EmptyWishlist';
 
 export default function WishlistScreen() {
-  const { wishlistItems, loading, error, removeFromWishlist, clearWishlist, addAllToCart, refreshWishlist, lastUpdated } = useWishlist();
+  const { 
+    wishlistItems, 
+    loading, 
+    error, 
+    removeFromWishlist, 
+    clearWishlist, 
+    addAllToCart, 
+    refreshWishlist, 
+  } = useWishlist();
   const { addToCart } = useCart();
   const { user } = useAuth();
   const [processingAction, setProcessingAction] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
   const [lastFocusRefresh, setLastFocusRefresh] = useState(0);
+  const [viewMode, setViewMode] = useState<'grid' | 'list'>('grid');
+  const [selectedCategory, setSelectedCategory] = useState<string | null>(null);
+  const [showFilter, setShowFilter] = useState(false);
+  const insets = useSafeAreaInsets();
+  
+  // Animation values
+  const filterHeight = useSharedValue(0);
+  
+  // Animated styles
+  const filterContainerStyle = useAnimatedStyle(() => {
+    return {
+      height: filterHeight.value,
+      opacity: filterHeight.value === 0 ? 0 : 1,
+      overflow: 'hidden',
+    };
+  });
+  
+  // Toggle filter section
+  const toggleFilter = useCallback(() => {
+    if (showFilter) {
+      filterHeight.value = withTiming(0, { duration: 300 });
+      setTimeout(() => setShowFilter(false), 300);
+    } else {
+      setShowFilter(true);
+      filterHeight.value = withTiming(80, { duration: 300 });
+    }
+  }, [showFilter, filterHeight]);
 
-  // Refresh wishlist when the screen comes into focus, but not too frequently
+  // Refresh wishlist when the screen comes into focus
   useFocusEffect(
     useCallback(() => {
       if (!user) return;
       
       const now = Date.now();
       // Only refresh if it's been more than 2 seconds since the last refresh
-      // or if this is the first time (lastFocusRefresh === 0)
       if (now - lastFocusRefresh > 2000 || lastFocusRefresh === 0) {
         refreshWishlist();
         setLastFocusRefresh(now);
@@ -38,41 +95,62 @@ export default function WishlistScreen() {
     setRefreshing(false);
   }, [refreshWishlist]);
 
-  if (!user) {
-    return (
-      <View style={styles.emptyContainer}>
-        <Text style={styles.emptyTitle}>Please Login</Text>
-        <Text style={styles.emptyText}>You need to login to view your wishlist</Text>
-        <TouchableOpacity 
-          style={styles.loginButton}
-          onPress={() => router.push('/auth')}
-        >
-          <Text style={styles.loginButtonText}>Login</Text>
-        </TouchableOpacity>
-      </View>
+  // Group items by category for filtering
+  const categories = React.useMemo(() => {
+    if (!wishlistItems.length) return [];
+    
+    const categoriesMap = new Map();
+    wishlistItems.forEach(item => {
+      // Safely access category with type checking
+      const category = (item.product as any).category || 'Uncategorized';
+      if (!categoriesMap.has(category)) {
+        categoriesMap.set(category, 1);
+      } else {
+        categoriesMap.set(category, categoriesMap.get(category) + 1);
+      }
+    });
+    
+    return Array.from(categoriesMap.entries()).map(([name, count]) => ({
+      name,
+      count
+    }));
+  }, [wishlistItems]);
+  
+  // Filter items by category
+  const filteredItems = React.useMemo(() => {
+    if (!selectedCategory) return wishlistItems;
+    
+    return wishlistItems.filter(item => 
+      ((item.product as any).category || 'Uncategorized') === selectedCategory
     );
-  }
+  }, [wishlistItems, selectedCategory]);
 
-  if (loading && !refreshing) {
-    return <LoadingSpinner />;
-  }
-
-  if (error) {
-    return <ErrorMessage message="Failed to load wishlist" />;
-  }
-
+  // Handle removing item from wishlist
   const handleRemoveFromWishlist = async (productId: string) => {
     setProcessingAction(productId);
     try {
       await removeFromWishlist(productId);
     } catch (err) {
-      
       Alert.alert('Error', 'Failed to remove item from wishlist');
     } finally {
       setProcessingAction(null);
     }
   };
 
+  // Handle adding item to cart
+  const handleAddToCart = async (productId: string) => {
+    setProcessingAction(`cart-${productId}`);
+    try {
+      await addToCart(productId, 1);
+      Alert.alert('Success', 'Item added to cart');
+    } catch (err) {
+      Alert.alert('Error', 'Failed to add item to cart');
+    } finally {
+      setProcessingAction(null);
+    }
+  };
+
+  // Handle adding all items to cart
   const handleAddAllToCart = async () => {
     setProcessingAction('add-all');
     try {
@@ -90,13 +168,13 @@ export default function WishlistScreen() {
         Alert.alert('Error', 'Failed to add items to cart');
       }
     } catch (err) {
-      
       Alert.alert('Error', 'Failed to add items to cart');
     } finally {
       setProcessingAction(null);
     }
   };
 
+  // Handle clearing the wishlist
   const handleClearWishlist = async () => {
     Alert.alert(
       'Clear Wishlist',
@@ -115,7 +193,6 @@ export default function WishlistScreen() {
               await clearWishlist();
               Alert.alert('Success', 'Wishlist cleared');
             } catch (err) {
-              
               Alert.alert('Error', 'Failed to clear wishlist');
             } finally {
               setProcessingAction(null);
@@ -126,41 +203,101 @@ export default function WishlistScreen() {
     );
   };
 
-  if (wishlistItems.length === 0) {
+  // Render wishlist item
+  const renderItem = ({ item, index }: { item: any, index: number }) => (
+    <WishlistItem 
+      item={item}
+      index={index}
+      viewMode={viewMode}
+      onRemove={handleRemoveFromWishlist}
+      onAddToCart={handleAddToCart}
+      processingAction={processingAction}
+    />
+  );
+
+  // Show loading state
+  if (loading && !refreshing) {
+    return <LoadingSpinner />;
+  }
+
+  // Show error state
+  if (error) {
+    return <ErrorMessage message="Failed to load wishlist" />;
+  }
+
+  // Show empty state for not logged in or empty wishlist
+  if (!user || wishlistItems.length === 0) {
     return (
-      <View style={styles.emptyContainer}>
-        <Text style={styles.emptyTitle}>Your Wishlist is Empty</Text>
-        <Text style={styles.emptyText}>Add items to your wishlist to see them here</Text>
-        <TouchableOpacity 
-          style={styles.shopButton}
-          onPress={() => router.push('/')}
-        >
-          <Text style={styles.shopButtonText}>Shop Now</Text>
-        </TouchableOpacity>
+      <View style={{ flex: 1, paddingTop: insets.top }}>
+        <StatusBar barStyle="dark-content" />
+        <EmptyWishlist isLoggedIn={!!user} />
       </View>
     );
   }
 
   return (
-    <View style={styles.container}>
-      <View style={styles.header}>
-        <Text style={styles.title}>My Wishlist</Text>
-        <Text style={styles.subtitle}>{wishlistItems.length} items saved</Text>
-        {wishlistItems.length > 0 && (
-          <TouchableOpacity 
-            style={styles.clearButton}
-            onPress={handleClearWishlist}
-            disabled={processingAction === 'clear'}
-          >
-            <Text style={styles.clearButtonText}>
-              {processingAction === 'clear' ? 'Clearing...' : 'Clear All'}
+    <View style={[styles.container, { paddingTop: insets.top }]}>
+      <StatusBar barStyle="dark-content" />
+      
+      {/* Header */}
+      <Animated.View 
+        entering={FadeIn.duration(300)} 
+        style={styles.header}
+      >
+        <View style={styles.headerRow}>
+          <View>
+            <Text style={styles.title}>My Wishlist</Text>
+            <Text style={styles.subtitle}>
+              {filteredItems.length === wishlistItems.length 
+                ? `${wishlistItems.length} items saved` 
+                : `${filteredItems.length} of ${wishlistItems.length} items`
+              }
             </Text>
-          </TouchableOpacity>
+          </View>
+          
+          <View style={styles.headerActions}>
+            <TouchableOpacity 
+              style={styles.iconButton}
+              onPress={toggleFilter}
+            >
+              <Search size={22} color="#333" />
+            </TouchableOpacity>
+            
+            <TouchableOpacity 
+              style={styles.iconButton}
+              onPress={() => setViewMode(viewMode === 'grid' ? 'list' : 'grid')}
+            >
+              {viewMode === 'grid' ? (
+                <List size={22} color="#333" />
+              ) : (
+                <Grid size={22} color="#333" />
+              )}
+            </TouchableOpacity>
+          </View>
+        </View>
+        
+        {/* Filter section */}
+        {showFilter && (
+          <Animated.View style={[filterContainerStyle]}>
+            <CategoryFilter 
+              categories={categories}
+              selectedCategory={selectedCategory}
+              onSelectCategory={setSelectedCategory}
+            />
+          </Animated.View>
         )}
-      </View>
+      </Animated.View>
 
-      <ScrollView 
-        style={styles.wishlist}
+      {/* Wishlist items */}
+      <FlatList
+        data={filteredItems}
+        renderItem={renderItem}
+        keyExtractor={(item) => item.id}
+        numColumns={viewMode === 'grid' ? 2 : 1}
+        key={viewMode} // Force re-render when view mode changes
+        columnWrapperStyle={viewMode === 'grid' ? styles.columnWrapper : undefined}
+        contentContainerStyle={viewMode === 'grid' ? styles.gridContainer : styles.listContainer}
+        showsVerticalScrollIndicator={false}
         refreshControl={
           <RefreshControl
             refreshing={refreshing}
@@ -169,52 +306,28 @@ export default function WishlistScreen() {
             tintColor="#2ECC71"
           />
         }
-      >
-        {wishlistItems.map((item) => (
-          <View key={item.id} style={styles.wishlistItem}>
-            <TouchableOpacity
-              onPress={() => {
-                router.push({
-                  pathname: '/product/[id]',
-                  params: { id: item.product_id }
-                });
-              }}
-            >
-              <Image 
-                source={{ uri: item.product.image_urls[0] }} 
-                style={styles.itemImage} 
-              />
-            </TouchableOpacity>
-            <View style={styles.itemInfo}>
-              <Text style={styles.itemName}>{item.product.name}</Text>
-              <Text style={styles.itemPrice}>₹{item.product.price}/{item.product.unit}</Text>
-            </View>
-            <View style={styles.actions}>
-              <TouchableOpacity 
-                style={styles.actionButton}
-                onPress={() => {
-                  addToCart(item.product_id, 1);
-                }}
-              >
-                <ShoppingBag size={24} color="#2ECC71" />
-              </TouchableOpacity>
-              <TouchableOpacity 
-                style={styles.actionButton}
-                onPress={() => handleRemoveFromWishlist(item.product_id)}
-                disabled={processingAction === item.product_id}
-              >
-                {processingAction === item.product_id ? (
-                  <ActivityIndicator size="small" color="#FF4B4B" />
-                ) : (
-                  <Trash2 size={24} color="#FF4B4B" />
-                )}
-              </TouchableOpacity>
-            </View>
-          </View>
-        ))}
-      </ScrollView>
+      />
 
-      {wishlistItems.length > 0 && (
+      {/* Footer actions */}
+      <Animated.View 
+        entering={SlideInDown.duration(400)}
+        style={styles.footer}
+      >
+        <TouchableOpacity 
+          style={styles.clearButton}
+          onPress={handleClearWishlist}
+          disabled={processingAction === 'clear'}
+        >
+          {processingAction === 'clear' ? (
+            <ActivityIndicator size="small" color="#FF4B4B" />
+          ) : (
+            <>
+              <Trash2 size={20} color="#FF4B4B" />
+              <Text style={styles.clearButtonText}>Clear All</Text>
+            </>
+          )}
+        </TouchableOpacity>
+        
         <TouchableOpacity 
           style={styles.addAllButton}
           onPress={handleAddAllToCart}
@@ -223,10 +336,13 @@ export default function WishlistScreen() {
           {processingAction === 'add-all' ? (
             <ActivityIndicator size="small" color="#FFFFFF" />
           ) : (
-            <Text style={styles.addAllButtonText}>Add All to Cart</Text>
+            <>
+              <ShoppingBag size={20} color="#FFFFFF" />
+              <Text style={styles.addAllButtonText}>Add All to Cart</Text>
+            </>
           )}
         </TouchableOpacity>
-      )}
+      </Animated.View>
     </View>
   );
 }
@@ -237,130 +353,97 @@ const styles = StyleSheet.create({
     backgroundColor: '#fff',
   },
   header: {
-    paddingTop: 60,
-    paddingHorizontal: 20,
-    paddingBottom: 20,
-    flexDirection: 'column',
+    paddingHorizontal: 16,
+    paddingBottom: 8,
+    borderBottomWidth: 1,
+    borderBottomColor: '#f5f5f5',
+    backgroundColor: '#fff',
+    zIndex: 10,
+  },
+  headerRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingVertical: 12,
   },
   title: {
     fontFamily: 'Poppins-SemiBold',
-    fontSize: 24,
+    fontSize: 22,
     color: '#333',
-    marginBottom: 4,
   },
   subtitle: {
     fontFamily: 'Poppins-Regular',
     fontSize: 14,
     color: '#666',
+    marginTop: 2,
+  },
+  headerActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  iconButton: {
+    width: 40,
+    height: 40,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: 20,
+    backgroundColor: '#f5f5f5',
+  },
+  gridContainer: {
+    padding: 16,
+    paddingBottom: 80,
+  },
+  listContainer: {
+    padding: 16,
+    paddingBottom: 80,
+  },
+  columnWrapper: {
+    justifyContent: 'space-between',
+  },
+  footer: {
+    position: 'absolute',
+    bottom: 0,
+    left: 0,
+    right: 0,
+    backgroundColor: '#fff',
+    flexDirection: 'row',
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    borderTopWidth: 1,
+    borderTopColor: '#f0f0f0',
+    gap: 12,
   },
   clearButton: {
-    position: 'absolute',
-    right: 20,
-    top: 60,
-    padding: 8,
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#fff',
+    borderWidth: 1,
+    borderColor: '#FF4B4B',
+    borderRadius: 12,
+    paddingVertical: 12,
+    gap: 8,
   },
   clearButtonText: {
     fontFamily: 'Poppins-Medium',
     fontSize: 14,
     color: '#FF4B4B',
   },
-  wishlist: {
-    flex: 1,
-    padding: 20,
-  },
-  wishlistItem: {
-    flexDirection: 'row',
-    backgroundColor: '#fff',
-    borderRadius: 12,
-    marginBottom: 16,
-    padding: 12,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 4,
-    elevation: 3,
-  },
-  itemImage: {
-    width: 80,
-    height: 80,
-    borderRadius: 8,
-  },
-  itemInfo: {
-    flex: 1,
-    marginLeft: 16,
-    justifyContent: 'center',
-  },
-  itemName: {
-    fontFamily: 'Poppins-Medium',
-    fontSize: 16,
-    color: '#333',
-    marginBottom: 4,
-  },
-  itemPrice: {
-    fontFamily: 'Poppins-SemiBold',
-    fontSize: 18,
-    color: '#2ECC71',
-  },
-  actions: {
-    justifyContent: 'center',
-    gap: 12,
-  },
-  actionButton: {
-    padding: 8,
-  },
   addAllButton: {
-    margin: 20,
+    flex: 2,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
     backgroundColor: '#2ECC71',
     borderRadius: 12,
-    padding: 16,
-    alignItems: 'center',
+    paddingVertical: 12,
+    gap: 8,
   },
   addAllButtonText: {
     fontFamily: 'Poppins-SemiBold',
-    fontSize: 16,
-    color: '#fff',
-  },
-  emptyContainer: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-    padding: 20,
-  },
-  emptyTitle: {
-    fontFamily: 'Poppins-SemiBold',
-    fontSize: 20,
-    color: '#333',
-    marginBottom: 8,
-  },
-  emptyText: {
-    fontFamily: 'Poppins-Regular',
-    fontSize: 16,
-    color: '#666',
-    textAlign: 'center',
-    marginBottom: 24,
-  },
-  shopButton: {
-    backgroundColor: '#2ECC71',
-    borderRadius: 12,
-    padding: 16,
-    width: '80%',
-    alignItems: 'center',
-  },
-  shopButtonText: {
-    fontFamily: 'Poppins-SemiBold',
-    fontSize: 16,
-    color: '#fff',
-  },
-  loginButton: {
-    backgroundColor: '#2ECC71',
-    borderRadius: 12,
-    padding: 16,
-    width: '80%',
-    alignItems: 'center',
-  },
-  loginButtonText: {
-    fontFamily: 'Poppins-SemiBold',
-    fontSize: 16,
+    fontSize: 14,
     color: '#fff',
   },
 });

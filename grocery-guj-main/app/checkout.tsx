@@ -239,17 +239,17 @@ export default function CheckoutScreen() {
         // Parse the time slot and create a date
         const isToday = slot.day === 'today';
         const [hours, minutes] = slot.start.split(':').map(Number);
-        
-        const date = new Date();
-        if (!isToday) {
-          // Add a day for tomorrow
-          date.setDate(date.getDate() + 1);
-        }
-        
+          
+          const date = new Date();
+          if (!isToday) {
+            // Add a day for tomorrow
+            date.setDate(date.getDate() + 1);
+          }
+          
         // Set time with precise hour and minute
         date.setHours(hours, minutes, 0, 0);
-        
-        return date.toISOString();
+          
+          return date.toISOString();
       }
     }
     
@@ -465,7 +465,7 @@ export default function CheckoutScreen() {
           <View style={styles.progressStep}>
             <View style={[styles.progressCircle, styles.activeProgressCircle]}>
               <ShoppingBag size={18} color="#fff" />
-            </View>
+          </View>
             <Text style={[styles.progressText, styles.activeProgressText]}>Cart</Text>
           </View>
           <View style={styles.progressConnector} />
@@ -481,7 +481,7 @@ export default function CheckoutScreen() {
               <Truck size={18} color="#999" />
             </View>
             <Text style={styles.progressText}>Delivery</Text>
-          </View>
+                    </View>
         </Animated.View>
 
         {/* General Error Message */}
