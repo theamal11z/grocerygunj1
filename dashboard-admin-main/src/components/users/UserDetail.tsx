@@ -9,6 +9,7 @@ import { Calendar, Mail, Phone, MapPin, ShoppingBag, User, Shield, Clock, FileEd
 import { Separator } from "@/components/ui/separator";
 import { Database } from "@/lib/database.types";
 import { cn } from "@/lib/utils";
+import { UserOrderHistory } from "./UserOrderHistory";
 
 // Define profile type
 type Profile = Database['public']['Tables']['profiles']['Row'];
@@ -209,84 +210,32 @@ export const UserDetail = ({ user }: { user: EnhancedProfile }) => {
           </Card>
         </TabsContent>
         
-        {/* Orders Tab */}
+        {/* Orders Tab - Now using the UserOrderHistory component */}
         <TabsContent value="orders" className="space-y-4">
-          {user.orderCount ? (
-            <Card>
-              <CardHeader>
-                <CardTitle className="text-base">Order History</CardTitle>
-                <CardDescription>
-                  Customer has placed {user.orderCount} orders with a total value of np{user.totalSpent?.toFixed(2) || "0.00"}
-                </CardDescription>
-              </CardHeader>
-              <CardContent className="space-y-4">
-                <div className="grid grid-cols-2 gap-4">
-                  <div className="space-y-1">
-                    <Label className="text-xs text-muted-foreground">Average Order Value</Label>
-                    <div className="text-xl font-bold">np{averageOrderValue}</div>
-                  </div>
-                  
-                  <div className="space-y-1">
-                    <Label className="text-xs text-muted-foreground">Last Order</Label>
-                    <div>{user.last_order_date ? formatDate(user.last_order_date) : "N/A"}</div>
-                  </div>
-                </div>
-              </CardContent>
-              <CardFooter className="flex justify-end border-t p-4">
-                <Button variant="outline" size="sm" className="gap-1.5">
-                  <ExternalLink className="h-4 w-4" />
-                  <span>View Order History</span>
-                </Button>
-              </CardFooter>
-            </Card>
-          ) : (
-            <Card className="p-6">
-              <div className="text-center py-8 space-y-2">
-                <ShoppingBag className="h-12 w-12 mx-auto text-muted-foreground/50" />
-                <h3 className="font-medium">No Orders Yet</h3>
-                <p className="text-sm text-muted-foreground">This user hasn't placed any orders yet.</p>
-              </div>
-            </Card>
-          )}
+          <UserOrderHistory userId={user.id} />
         </TabsContent>
         
         {/* Addresses Tab */}
-        <TabsContent value="addresses">
-          {user.addressCount ? (
+        <TabsContent value="addresses" className="space-y-4">
+          {user.addressCount && user.addressCount > 0 ? (
             <Card>
               <CardHeader>
                 <CardTitle className="text-base">Saved Addresses</CardTitle>
                 <CardDescription>
-                  Customer has {user.addressCount} saved delivery addresses
+                  User has {user.addressCount} saved addresses
                 </CardDescription>
               </CardHeader>
               <CardContent>
-                <div className="space-y-2">
-                  {/* We don't have the actual addresses so we show a placeholder */}
-                  <div className="bg-muted/50 p-3 rounded-md border">
-                    <div className="flex justify-between">
-                      <div>
-                        <div className="font-medium">Primary Address</div>
-                        <div className="text-sm text-muted-foreground">Address details would be shown here</div>
-                      </div>
-                      <Badge>Default</Badge>
-                    </div>
-                  </div>
-                </div>
+                {/* Address content would go here */}
+                <div className="text-muted-foreground text-sm">Address details are not available in this view</div>
               </CardContent>
-              <CardFooter className="flex justify-end border-t p-4">
-                <Button variant="outline" size="sm" className="gap-1.5">
-                  <ExternalLink className="h-4 w-4" />
-                  <span>Manage Addresses</span>
-                </Button>
-              </CardFooter>
             </Card>
           ) : (
             <Card className="p-6">
               <div className="text-center py-8 space-y-2">
                 <MapPin className="h-12 w-12 mx-auto text-muted-foreground/50" />
-                <h3 className="font-medium">No Addresses</h3>
-                <p className="text-sm text-muted-foreground">This user hasn't added any delivery addresses yet.</p>
+                <h3 className="font-medium">No Addresses Saved</h3>
+                <p className="text-sm text-muted-foreground">This user hasn't saved any addresses yet.</p>
               </div>
             </Card>
           )}
